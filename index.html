@@ -12,26 +12,26 @@
 <style>
 /* ═══════════════ RESET & VARS ═══════════════ */
 :root {
-  --bg:       #050400;
-  --bg1:      #0d0a00;
-  --bg2:      #171200;
-  --bg3:      #1e1800;
-  --magenta:  #f5a623;
-  --magenta2: #ffc107;
-  --cyan:     #ffb300;
-  --cyan2:    #e65100;
-  --gold:     #ffd54f;
-  --gold2:    #fff9c4;
-  --red:      #ff3d00;
-  --orange:   #ff6d00;
-  --green:    #69f0ae;
-  --white:    #fff8e1;
-  --muted:    rgba(255,248,225,0.4);
-  --border:   rgba(245,166,35,0.2);
-  --border2:  rgba(255,179,0,0.3);
-  --glow-m:   0 0 20px rgba(245,166,35,0.5);
-  --glow-c:   0 0 20px rgba(255,179,0,0.5);
-  --glow-g:   0 0 20px rgba(255,213,79,0.6);
+  --bg:       #141414;
+  --bg1:      #1a1a1a;
+  --bg2:      #202020;
+  --bg3:      #272727;
+  --magenta:  #f7b500;
+  --magenta2: #ffc929;
+  --cyan:     #ff8c00;
+  --cyan2:    #e67e00;
+  --gold:     #f7b500;
+  --gold2:    #ffe066;
+  --red:      #ff4444;
+  --orange:   #ff8c00;
+  --green:    #4cde8a;
+  --white:    #f0f0f0;
+  --muted:    rgba(240,240,240,0.38);
+  --border:   rgba(247,181,0,0.18);
+  --border2:  rgba(247,181,0,0.32);
+  --glow-m:   0 0 18px rgba(247,181,0,0.35);
+  --glow-c:   0 0 18px rgba(255,140,0,0.35);
+  --glow-g:   0 0 22px rgba(247,181,0,0.45);
   --mono:     'JetBrains Mono', monospace;
   --display:  'Bebas Neue', sans-serif;
   --body:     'Rajdhani', sans-serif;
@@ -55,16 +55,14 @@ body::before {
   background: repeating-linear-gradient(
     0deg,
     transparent, transparent 2px,
-    rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px
+    rgba(0,0,0,0.05) 2px, rgba(0,0,0,0.05) 4px
   );
 }
 body::after {
   content: '';
   position: fixed; inset: 0; z-index: 2;
   pointer-events: none;
-  background:
-    radial-gradient(ellipse at 15% 20%, rgba(245,166,35,0.07) 0%, transparent 45%),
-    radial-gradient(ellipse at 85% 80%, rgba(255,109,0,0.05) 0%, transparent 45%);
+  background: radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(0,0,0,0.35) 100%);
 }
 
 /* ═══════════════ GRID BG ═══════════════ */
@@ -79,17 +77,17 @@ body::after {
 /* ═══════════════ TOPBAR ═══════════════ */
 .topbar {
   position: sticky; top: 0; z-index: 200;
-  background: rgba(5,4,0,0.93);
+  background: rgba(14,14,14,0.96);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 1.5rem; height: 56px;
-  box-shadow: 0 2px 40px rgba(245,166,35,0.12);
+  box-shadow: 0 1px 0 rgba(247,181,0,0.15), 0 4px 30px rgba(0,0,0,0.4);
 }
 .brand {
   display: flex; align-items: center; gap: 0.75rem;
   font-family: var(--display); font-size: 1.5rem; letter-spacing: 0.1em;
-  background: linear-gradient(135deg, var(--gold), var(--magenta));
+  background: linear-gradient(135deg, #f7b500, #ff8c00);
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .brand-icon {
@@ -138,7 +136,7 @@ body::after {
 }
 .setup-avatar { width: 120px; height: 120px; border-radius: 50%; border: 2px solid var(--gold); box-shadow: var(--glow-g), 0 0 60px rgba(245,166,35,0.2); animation: float 4s ease-in-out infinite; }
 @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
-.setup-title { font-family: var(--display); font-size: 3rem; letter-spacing: 0.15em; background: linear-gradient(135deg, var(--gold), var(--magenta)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.setup-title { font-family: var(--display); font-size: 3rem; letter-spacing: 0.15em; background: linear-gradient(135deg, #f7b500, #ff8c00); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .setup-sub { font-size: 1rem; color: var(--muted); max-width: 480px; line-height: 1.6; }
 .setup-card { background: var(--bg1); border: 1px solid var(--border); padding: 2rem; width: 100%; max-width: 520px; }
 .setup-card h3 { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); margin-bottom: 1.5rem; }
@@ -179,7 +177,7 @@ body::after {
 
 /* ═══════════════ PANELS ═══════════════ */
 .panel {
-  background: rgba(12,9,0,0.72); border: 1px solid var(--border);
+  background: rgba(20,20,20,0.82); border: 1px solid var(--border);
   backdrop-filter: blur(10px); position: relative; overflow: hidden;
 }
 .panel::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--magenta), transparent); }
@@ -295,7 +293,7 @@ td.muted { color: var(--muted); }
 .toast {
   padding: 0.8rem 1.2rem; border: 1px solid; min-width: 280px; max-width: 380px;
   font-family: var(--mono); font-size: 0.75rem; line-height: 1.5;
-  animation: slideIn 0.3s ease; background: rgba(8,6,0,0.96); backdrop-filter: blur(10px);
+  animation: slideIn 0.3s ease; background: rgba(18,18,18,0.97); backdrop-filter: blur(10px);
   display: flex; gap: 0.6rem; align-items: flex-start;
 }
 .toast.danger { border-color: var(--red); box-shadow: 0 0 30px rgba(255,23,68,0.3); }
@@ -305,7 +303,7 @@ td.muted { color: var(--muted); }
 @keyframes slideIn { from { opacity:0; transform: translateX(20px); } to { opacity:1; transform: translateX(0); } }
 
 /* ═══════════════ MODAL ═══════════════ */
-.modal-overlay { position: fixed; inset: 0; background: rgba(5,4,0,0.90); backdrop-filter: blur(12px); z-index: 500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(14,14,14,0.92); backdrop-filter: blur(12px); z-index: 500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .modal { background: var(--bg1); border: 1px solid var(--border2); width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--glow-g), 0 40px 80px rgba(0,0,0,0.6); }
 .modal-head { padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .modal-title { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.25em; text-transform: uppercase; color: var(--gold); }
@@ -392,19 +390,19 @@ td.muted { color: var(--muted); }
 <body>
 
 <!-- ANIMATED GOLD BACKGROUND -->
-<canvas id="goldCanvas" style="position:fixed;inset:0;z-index:0;pointer-events:none;width:100%;height:100%;opacity:0.55"></canvas>
+<canvas id="goldCanvas" style="position:fixed;inset:0;z-index:0;pointer-events:none;width:100%;height:100%;opacity:0.75"></canvas>
 <style>
 @keyframes gridPulse {
-  0%,100% { opacity:0.04; }
-  50%      { opacity:0.09; }
+  0%,100% { opacity:0.6; }
+  50%      { opacity:1; }
 }
 .grid-overlay {
   position:fixed; inset:0; z-index:0; pointer-events:none;
   background-image:
-    linear-gradient(rgba(245,166,35,0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(245,166,35,0.06) 1px, transparent 1px);
+    linear-gradient(rgba(247,181,0,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(247,181,0,0.07) 1px, transparent 1px);
   background-size: 60px 60px;
-  animation: gridPulse 6s ease-in-out infinite;
+  animation: gridPulse 7s ease-in-out infinite;
 }
 </style>
 <div class="grid-overlay"></div>
@@ -422,10 +420,10 @@ td.muted { color: var(--muted); }
   window.addEventListener('resize', resize);
 
   const COLORS = [
-    'rgba(245,166,35,',
-    'rgba(255,193,7,',
+    'rgba(247,181,0,',
+    'rgba(255,200,0,',
     'rgba(255,140,0,',
-    'rgba(255,213,79,',
+    'rgba(255,220,80,',
   ];
 
   function Particle(){
@@ -436,8 +434,8 @@ td.muted { color: var(--muted); }
       this.vx  = (Math.random() - 0.5) * 0.3;
       this.vy  = (Math.random() - 0.5) * 0.3 - 0.15;
       this.col = COLORS[Math.floor(Math.random()*COLORS.length)];
-      this.a   = Math.random() * 0.5 + 0.1;
-      this.da  = (Math.random() - 0.5) * 0.004;
+      this.a   = Math.random() * 0.55 + 0.2;
+      this.da  = (Math.random() - 0.5) * 0.003;
       this.life = 0;
       this.maxLife = 200 + Math.random() * 400;
     };
@@ -449,9 +447,10 @@ td.muted { color: var(--muted); }
 
   // Golden orbs — large slow glowing circles
   const orbs = [
-    { x:0.15, y:0.25, r:200, color:'rgba(245,166,35,', speed:0.0003, phase:0 },
-    { x:0.85, y:0.75, r:160, color:'rgba(255,140,0,',  speed:0.0004, phase:2 },
-    { x:0.5,  y:0.1,  r:120, color:'rgba(255,213,79,', speed:0.0005, phase:4 },
+    { x:0.05, y:0.15, r:280, color:'rgba(247,181,0,',  speed:0.00025, phase:0 },
+    { x:0.95, y:0.85, r:240, color:'rgba(255,140,0,',  speed:0.00032, phase:2.1 },
+    { x:0.92, y:0.08, r:180, color:'rgba(255,210,0,',  speed:0.00041, phase:4.3 },
+    { x:0.08, y:0.92, r:160, color:'rgba(255,120,0,',  speed:0.00038, phase:1.5 },
   ];
 
   let t = 0;
@@ -463,8 +462,8 @@ td.muted { color: var(--muted); }
       const ox = (o.x + Math.sin(t * o.speed + o.phase) * 0.08) * W;
       const oy = (o.y + Math.cos(t * o.speed + o.phase) * 0.06) * H;
       const grd = ctx.createRadialGradient(ox,oy,0,ox,oy,o.r);
-      grd.addColorStop(0,   o.color + '0.09)');
-      grd.addColorStop(0.4, o.color + '0.04)');
+      grd.addColorStop(0,   o.color + '0.13)');
+      grd.addColorStop(0.4, o.color + '0.06)');
       grd.addColorStop(1,   o.color + '0)');
       ctx.beginPath();
       ctx.arc(ox, oy, o.r, 0, Math.PI*2);
@@ -484,7 +483,7 @@ td.muted { color: var(--muted); }
       p.x += p.vx;
       p.y += p.vy;
       p.a += p.da;
-      if(p.a<0.05||p.a>0.6) p.da*=-1;
+      if(p.a<0.1||p.a>0.65) p.da*=-1;
     });
 
     t++;
