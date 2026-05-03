@@ -1001,7 +1001,7 @@ function renderRecentHistory() {
     ${all.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,25).map(e=>`<tr>
       <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}</td>
       <td><span class="chain-dot" style="background:${CHAINS[e.chain]?.color}"></span> <span style="color:${CHAINS[e.chain]?.color};font-size:0.8rem">${CHAINS[e.chain]?.name||e.chain}</span></td>
-      <td><span style="color:${e.type==='supply'?'var(--green)':e.type==='borrow'?'var(--amber)':e.type==='repay'?'var(--blue)':e.type==='withdraw'?'var(--gold)':'var(--red)';font-weight:600}">${(e.type||'?').toUpperCase()}</span></td>
+      <td><span style="color:${e.type==='supply'?'var(--green)':e.type==='borrow'?'var(--amber)':e.type==='repay'?'var(--blue)':e.type==='withdraw'?'var(--gold)':'var(--red)'};font-weight:700">${(e.type||'?').toUpperCase()}</span></td>
       <td style="font-weight:600">${e.asset||'—'}</td>
       <td class="mono gold">$${fmt(e.amountUSD||0)}</td>
       <td class="txhash">${e.txhash?`<a href="${CHAINS[e.chain]?.explorer}/tx/${e.txhash}" target="_blank">${truncTx(e.txhash)}</a>`:'—'}</td>
