@@ -741,7 +741,7 @@ async function testHistoryAPI(chainKey) {
 
   el.innerHTML = `<span style="color:var(--muted)">A testar ${chain.name}... (pode demorar 5-10s)</span>`;
 
-  const url = `${chain.explorerApi}?module=account&action=tokentx&address=${w.addr}&startblock=0&endblock=99999999&sort=desc&apikey=${w.apiKey}&offset=20&page=1`;
+  const url = `https://api.etherscan.io/v2/api?chainid=${chain.id}&module=account&action=tokentx&address=${w.addr}&startblock=0&endblock=99999999&sort=desc&apikey=${w.apiKey}&offset=20&page=1`;
   const displayUrl = url.replace(w.apiKey, '***KEY***');
 
   let lines = [`<span style="color:var(--muted)">URL: ${displayUrl}</span>`];
@@ -762,7 +762,8 @@ async function testHistoryAPI(chainKey) {
 
     if (j.status === '0') {
       lines.push(`<span style="color:var(--red)">❌ API respondeu com erro: ${j.message} — ${JSON.stringify(j.result).slice(0,100)}</span>`);
-      if (j.message?.includes('Invalid')) lines.push(`<span style="color:var(--gold)">⚠ A tua API Key pode não ser válida para ${chain.name}. Tenta criar uma key em basescan.org directamente.</span>`);
+      if (j.message?.includes('Invalid')) lines.push(`<span style="color:var(--gold)">⚠ API Key inválida. Vai a etherscan.io → My Account → API Keys e cria/copia a key.</span>`);
+      if (j.message?.includes('deprecated') || j.result?.includes?.('deprecated')) lines.push(`<span style="color:var(--gold)">⚠ Endpoint deprecated — já corrigido na V2, tenta de novo após actualizar.</span>`);
       el.innerHTML = lines.join('<br>');
       return;
     }
@@ -1778,7 +1779,8 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
     let totalFetched = 0;
 
     while (keepFetching && page <= 5) {
-      const url = `${chain.explorerApi}?module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=${page}`;
+      // Etherscan API V2 - single endpoint for ALL chains (deprecated V1 per-chain endpoints removed)
+      const url = `https://api.etherscan.io/v2/api?chainid=${chain.id}&module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=${page}`;
       const res = await fetch(url, {signal: AbortSignal.timeout(20000)});
       const j = await res.json();
 
@@ -1845,7 +1847,7 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         '0x573ade81':'repay','0x2dad97d4':'repay','0xe311ef9b':'repay',
         '0x69328dec':'withdraw',
       };
-      const url2 = `${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=1`;
+      const url2 = `https://api.etherscan.io/v2/api?chainid=${chain.id}&module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=1`;
       const r2 = await fetch(url2, {signal: AbortSignal.timeout(20000)});
       const j2 = await r2.json();
       if (Array.isArray(j2.result)) {
