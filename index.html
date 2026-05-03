@@ -691,8 +691,30 @@ let interestTimer = null;
 // ══════════════════════════════════════════════════════════
 async function loadState() {
   try {
+    // Try v2 key first
     let raw = localStorage.getItem('ghost2_state');
+    // Try window.storage (Claude artifact env)
     if (!raw) { try { const r = await window.storage.get('ghost2_state'); if (r?.value) raw = r.value; } catch(e){} }
+    // Migrate from v1 if v2 not found
+    if (!raw) {
+      const v1raw = localStorage.getItem('ghost_state');
+      if (v1raw) {
+        try {
+          const v1 = JSON.parse(v1raw);
+          // Migrate v1 wallets to v2 format
+          if (v1.wallets?.length) {
+            state.wallets = v1.wallets.map(w=>({...w, sol:w.sol||'', apiKey:w.apiKey||w.etherscanKey||'', tgToken:'', tgChat:''}));
+            state.activeWId = v1.activeWalletId || v1.activeWId || v1.wallets[0]?.id || null;
+          }
+          // Migrate collateral (different field names in v1)
+          if (v1.colaterais?.length) {
+            state.collateral = v1.colaterais.map(c=>({...c, acqDate:c.acquired_date||c.acqDate||c.date, depDate:c.date||c.depDate, eur:c.amount_eur||c.eur, qty:c.amount_crypto||c.qty, walletId:c.walletId||state.wallets[0]?.id}));
+          }
+          console.log('Migrated from v1:', state.wallets.length, 'wallets');
+          saveState();
+        } catch(e) { console.warn('v1 migration failed:', e); }
+      }
+    }
     if (raw) { const p = JSON.parse(raw); Object.assign(state, p); }
   } catch(e) { console.warn('Load error:', e); }
   boot();
@@ -749,11 +771,22 @@ function showTab(tab) {
 
 function render() {
   const mc = document.getElementById('mainContent');
-  const w = activeWallet();
-  if (!state.wallets.length || !w) { mc.innerHTML = renderSetup(); return; }
-  const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
-  mc.innerHTML = `<div class="tab-content">${(renders[currentTab]||renderDashboard)(w)}</div>`;
-  afterRender();
+  if (!mc) return;
+  try {
+    const w = activeWallet();
+    if (!state.wallets.length || !w) { mc.innerHTML = renderSetup(); return; }
+    const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
+    mc.innerHTML = `<div class="tab-content">${(renders[currentTab]||renderDashboard)(w)}</div>`;
+    afterRender();
+  } catch(e) {
+    console.error('Render error:', e);
+    mc.innerHTML = `<div style="padding:2rem;text-align:center;color:var(--muted);font-family:var(--mono);font-size:0.8rem">
+      <div style="color:var(--red);font-size:1.2rem;margin-bottom:1rem">⚠ Erro de renderização</div>
+      <div style="margin-bottom:1rem">${e.message}</div>
+      <button class="btn btn-gold" onclick="currentTab='dashboard';render()">↺ Tentar novamente</button>
+      <button class="btn btn-outline" style="margin-left:0.5rem" onclick="clearAll()">Limpar dados</button>
+    </div>`;
+  }
 }
 
 function afterRender() {
@@ -775,6 +808,7 @@ function renderSetup() {
       <p class="setup-sub" style="margin-top:0.75rem">Monitor automático multi-protocolo com estratégia fiscal 365 dias para Portugal. Sem servidor. Os teus dados ficam contigo.</p>
     </div>
     <div class="setup-steps"><span>01</span> Regista a wallet → <span>02</span> A app busca os dados → <span>03</span> Monitoriza tudo</div>
+    <div style="font-family:var(--mono);font-size:0.6rem;color:rgba(247,181,0,0.4)">v2.0 · dados guardados localmente no teu browser</div>
     <div class="panel" style="width:100%;max-width:520px">
       <div class="panel-head"><span class="panel-title">⬡ Primeira Wallet</span></div>
       <div class="panel-body">
