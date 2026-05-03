@@ -655,6 +655,63 @@ const ALCHEMY_RPCS = {
   linea:    'https://linea-mainnet.g.alchemy.com/v2/',
 };
 
+// Known AAVE V3 aToken + debt token contract addresses per chain
+// Filtering by these avoids airdrops/meme coins in Alchemy results
+const AAVE_ATOKEN_CONTRACTS = {
+  base_supply: [
+    '0x4e65fe4dba92790696d040ac24aa414708f5c0ab',
+    '0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7',
+    '0x99cbc45ea5bb7ef3a5bc08fb1b7e56bb2442ef0d',
+    '0x0a1d576f3efef75b330424287a95a366e8281d54',
+    '0xcf3d55c10db69a28fd32a495b22a4cc2b1e97a2e',
+    '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22',
+    '0x27b0f29197fc7a32f5c8f36f9bb11f83f24adfd',
+  ],
+  base_debt: [
+    '0x59dca05b6c26dbd64b5381374aaac5cd05644c28',
+    '0x24e6e0795b3c7c71d965fcc4f371803d1c1dca1e',
+    '0x3c7680dfe7f732ca0279c39ff30fe2eafdae49db',
+  ],
+  eth_supply: [
+    '0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5',
+    '0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8',
+    '0x0b925ed163218f6662a35e0f0371ac234f9e9371',
+    '0x5ee5bf7ae06d1be5997a1a72006fe6c607ec6de8',
+    '0x23878914efe38d27c4d67ab83ed1b93a74d4086a',
+    '0xfa1fdbb71b0aa16162d76914d69cd8cb3ef92da',
+  ],
+  eth_debt: [
+    '0x72e95b8931767c79ba4eee721354d6e99a61d004',
+    '0xea51d7853eefb32b6ee06b1c12e6dcca88be0ffe',
+  ],
+  arbitrum_supply: [
+    '0x724dc807b04555b71ed48a6896b6f41593b8c637',
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
+    '0x191c10aa4af7c30e871e70c95db0e4eb77237530',
+    '0x6533afac2e7bccb20dca161449a13a32d391fb00',
+  ],
+  optimism_supply: [
+    '0x38d693ce1df5aadf7bc62595a37d667ad57922e',
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
+  ],
+  polygon_supply: [
+    '0xa4d94019934d8333ef880abffbf2fdd611c762bd',
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
+  ],
+  gnosis_supply: [
+    '0xd0dd6cef72143e22cced4867eb0d5f7328e8a41e',
+    '0x7a9ff54a6ee4a21223036890bb8c4ea2d62c686b',
+  ],
+  linea_supply: [
+    '0x2f69f7b95ec9f11cf5bde5acfb6be5beace94d9a',
+    '0x50c848501df91c18d95f42d5e41b5a3b7e83e1f',
+  ],
+  scroll_supply: [
+    '0x1d738a3436a8c9fed3f1ce8b88e16e03f99e8c99',
+    '0x117cfd9060525452db4a34d51c0b3b7599bc2e3b',
+  ],
+};
+
 const PROTOCOLS = {
   aave:     { name:'AAVE V3',         color:'#B6509E', chains:['eth','base','arbitrum','optimism','polygon','scroll','linea'], hasHF:true },
   morpho:   { name:'Morpho Blue',     color:'#1C55FE', chains:['eth','base'],                                                  hasHF:true },
@@ -767,7 +824,8 @@ async function testAlchemyAPI(chainKey) {
       body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
         fromBlock:'0x0', toBlock:'latest', toAddress: w.addr,
         order: 'desc',
-        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x32'
+        contractAddresses: [...(AAVE_ATOKEN_CONTRACTS[chainKey+'_supply']||[]),(AAVE_ATOKEN_CONTRACTS[chainKey+'_debt']||[])].flat(),
+        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
       }]}),
       signal: AbortSignal.timeout(20000)
     });
