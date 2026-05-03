@@ -631,7 +631,7 @@ const CHAINS = {
   polygon:  { name:'Polygon',   id:137,    color:'#8247E5', rpcs:['https://polygon-rpc.com','https://polygon-bor.publicnode.com'],                           explorer:'https://polygonscan.com',         explorerApi:'https://api.polygonscan.com/api',       aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
   scroll:   { name:'Scroll',    id:534352, color:'#FFDBB1', rpcs:['https://rpc.scroll.io'],                                                                  explorer:'https://scrollscan.com',          explorerApi:'https://api.scrollscan.com/api',        aavePool:'0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
   gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpcs:['https://gnosis.drpc.org','https://gnosis.publicnode.com','https://rpc.gnosischain.com','https://1rpc.io/gnosis'], explorer:'https://gnosisscan.io', explorerApi:'https://api.gnosisscan.io/api', aavePool:'0xb50201558B00496A145fE76f7424749556E326D8' },
-  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://linea.drpc.org','https://linea.publicnode.com','https://rpc.linea.build','https://linea-mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'], explorer:'https://lineascan.build', explorerApi:'https://api.lineascan.build/api', aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9', optional:true },
+  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://linea.drpc.org','https://linea.publicnode.com','https://rpc.linea.build','https://linea-mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'], explorer:'https://lineascan.build', explorerApi:'https://api.lineascan.build/api', aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9', },
 };
 
 const PROTOCOLS = {
@@ -1022,7 +1022,15 @@ function renderUpcomingExemptions(w) {
 function renderRecentHistory() {
   const all=[];
   Object.entries(live.history).forEach(([chain,evts])=>{ if(Array.isArray(evts)) evts.forEach(e=>all.push({...e,chain})); });
-  if (!all.length) return `<div class="empty"><span class="empty-icon">📡</span><p style="font-size:0.85rem">Sem histórico. Adiciona uma Etherscan API Key em Wallets → Editar, para activar o histórico automático.</p></div>`;
+  if (!all.length) return         `<div class="empty"><span class="empty-icon">📡</span>
+          <p style="font-size:0.85rem;margin-bottom:1rem">Sem histórico encontrado.</p>
+          <p style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);line-height:1.8">
+            ${activeWallet()?.apiKey ? '✓ API Key configurada' : '✗ Sem API Key — Config → Guardar API Key'}<br>
+            Redes com posição: ${Object.entries(live.positions).filter(([,p])=>p?.totalCollateral>0).map(([k])=>k).join(', ')||'nenhuma carregada ainda'}<br>
+            Transacções: ${state.txs.filter(t=>t.walletId===activeWallet()?.id).length} manuais importadas
+          </p>
+          <button class="btn btn-gold btn-sm" style="margin-top:1rem" onclick="refreshAll()">↻ Tentar Novamente</button>
+        </div>`;
   return `<table><thead><tr><th>Data/Hora</th><th>Rede</th><th>Tipo</th><th>Ativo</th><th>Valor USD</th><th>TX Hash</th></tr></thead><tbody>
     ${all.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,25).map(e=>`<tr>
       <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}):e.blockNumber?'Bloco #'+e.blockNumber:'—'}</td>
@@ -1649,95 +1657,133 @@ async function fetchHF(chainKey, walletAddr) {
   return null;
 }
 
-// Etherscan/Explorer history — uses ERC20 token transfers to detect AAVE activity
-const AAVE_SIGS = {
-  '0x617ba037':'supply','0xe8eda9df':'supply','0x02c205f0':'supply',
-  '0xa415bcad':'borrow','0xd5eed868':'borrow',
-  '0x573ade81':'repay','0x2dad97d4':'repay','0xe311ef9b':'repay',
-  '0x69328dec':'withdraw','0x8e19899e':'withdraw',
-  '0xd65f8804':'liquidation',
+// Etherscan/Explorer history
+// Jan 2025 approximate start blocks per chain (to cover all of 2025)
+const JAN2025_BLOCKS = {
+  eth:1, base:1, arbitrum:1, optimism:1, polygon:1, scroll:1, gnosis:1, linea:1
 };
-
-// Known aToken prefixes (to detect AAVE token transfers)
-const ATOKEN_NAMES = ['aEth','aBase','aArb','aOpt','aPol','aScr','aGno','aLin','aUSDC','aWETH','aWBTC','aDAI','aUSDT','aToken'];
+// We use startblock=1 and page through with offset=1000 since user supplied in 2025
 
 async function fetchHistory(chainKey, walletAddr, apiKey) {
   const chain = CHAINS[chainKey];
   if (!chain?.explorerApi || !walletAddr || !apiKey) return [];
   const events = [];
+  const userAddr = walletAddr.toLowerCase();
+  const aavePool = (chain.aavePool||'').toLowerCase();
+
+  // AAVE aToken patterns for Base and all chains
+  const isAToken = (sym) => {
+    if (!sym) return false;
+    const s = sym.trim();
+    // Matches: aBasUSDC, aBaseWETH, aUSDC, aWETH, aPolUSDC, aArbWETH, etc.
+    return /^a[A-Z]/.test(s) && !s.startsWith('AAVE') && !s.startsWith('ARB');
+  };
+  const isDebtToken = (sym) => {
+    if (!sym) return false;
+    const s = sym.toLowerCase();
+    return s.includes('debt') || s.startsWith('vd') || s.startsWith('sd');
+  };
+
   try {
-    // 1. ERC20 token transfers — aToken mints/burns show AAVE supply/borrow/repay/withdraw
-    // KEY: aTokens are minted by the aToken CONTRACT (not pool) directly TO the user
-    // So: user received aToken (tx.to===user) = SUPPLY
-    //     user sent aToken (tx.from===user) = WITHDRAW
-    //     user received debtToken (tx.to===user) = BORROW
-    const r1 = await fetch(`${chain.explorerApi}?module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=100&page=1`, {signal:AbortSignal.timeout(15000)});
-    const j1 = await r1.json();
-    console.log(`tokentx ${chainKey}: status=${j1.status} count=${j1.result?.length}`);
-    if (Array.isArray(j1.result)) {
-      const userAddr = walletAddr.toLowerCase();
-      j1.result.forEach(tx=>{
-        const sym = (tx.tokenSymbol||'').trim();
-        const symL = sym.toLowerCase();
-        // Detect aTokens: starts with 'a' + capital (aUSDC, aWETH, aBasUSDC, aBaseWETH)
-        const isAtoken = /^a[A-Z]/.test(sym) || /^aBase|^aEth|^aArb|^aOpt|^aPol|^aScr|^aGno|^aLin/i.test(sym);
-        // Detect variable debt tokens
-        const isDebt = symL.includes('debt') || symL.includes('variabledebt') || symL.includes('stabledebt');
-        const toUser = tx.to?.toLowerCase()===userAddr;
-        const fromUser = tx.from?.toLowerCase()===userAddr;
+    // Fetch ALL token transfers (up to 10000) from beginning
+    // Using multiple pages if needed
+    let page = 1;
+    let keepFetching = true;
+    let totalFetched = 0;
+
+    while (keepFetching && page <= 5) {
+      const url = `${chain.explorerApi}?module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=${page}`;
+      const res = await fetch(url, {signal: AbortSignal.timeout(20000)});
+      const j = await res.json();
+
+      if (j.status === '0') {
+        console.log(`tokentx ${chainKey} page${page}: ${j.message} (${j.result})`);
+        // "No transactions found" is OK - just means no results
+        break;
+      }
+
+      if (!Array.isArray(j.result) || j.result.length === 0) break;
+      totalFetched += j.result.length;
+
+      j.result.forEach(tx => {
+        const sym = (tx.tokenSymbol || '').trim();
+        const toUser   = tx.to?.toLowerCase() === userAddr;
+        const fromUser = tx.from?.toLowerCase() === userAddr;
+
         let type = null;
-        if (isAtoken && toUser)   type = 'supply';    // received aToken = supplied collateral
-        if (isAtoken && fromUser) type = 'withdraw';  // sent aToken back = withdrew collateral
-        if (isDebt && toUser)     type = 'borrow';    // received debt token = borrowed
-        if (isDebt && fromUser)   type = 'repay';     // sent debt token = repaid
+
+        if (isAToken(sym)) {
+          if (toUser)   type = 'supply';   // received aToken → supplied
+          if (fromUser) type = 'withdraw'; // sent aToken → withdrew
+        } else if (isDebtToken(sym)) {
+          if (toUser)   type = 'borrow';   // received debt token → borrowed
+          if (fromUser) type = 'repay';    // sent debt token → repaid
+        }
+
         if (type) {
-          const decimals = parseInt(tx.tokenDecimal)||18;
-          const amount = Number(tx.value)/Math.pow(10,decimals);
-          // Clean up token name: remove chain prefix from aToken name
-          const cleanSym = sym.replace(/^a(Bas|Base|Eth|Arb|Arb1|Opt|Pol|Scr|Gno|Lin)/i,'').replace(/^a/,'') || sym;
+          const decimals = parseInt(tx.tokenDecimal) || 18;
+          const amount = Number(tx.value) / Math.pow(10, decimals);
+          // Clean up aToken name: remove chain prefix → aBasUSDC → USDC
+          const cleanAsset = sym
+            .replace(/^a(Bas|Base|Eth|Arb|Arb1|Opt|Pol|Scr|Gno|Lin|Avax|Ftm)/i, '')
+            .replace(/^(variable|stable)Debt(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)?/i, '')
+            .replace(/^a/, '') || sym;
+
           events.push({
             type, chain: chainKey,
             timestamp: parseInt(tx.timeStamp),
-            asset: cleanSym,
+            asset: cleanAsset,
             amountCrypto: amount,
             amountUSD: 0,
-            txhash: tx.hash||'',
+            txhash: tx.hash || '',
             rawSymbol: sym,
           });
-          console.log(`  ${type}: ${amount.toFixed(4)} ${sym} → ${cleanSym}`);
+          console.log(`  ✓ ${chainKey} ${type}: ${amount.toFixed(4)} ${sym} (${cleanAsset})`);
         }
       });
+
+      // If we got less than 1000, no more pages
+      if (j.result.length < 1000) keepFetching = false;
+      else page++;
     }
+
+    console.log(`tokentx ${chainKey}: fetched ${totalFetched} transfers, found ${events.length} AAVE events`);
   } catch(e) { console.warn('tokentx failed:', chainKey, e.message); }
 
-  try {
-    // 2. Get normal transactions TO AAVE pool (direct calls)
-    const r2 = await fetch(`${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=30&page=1`, {signal:AbortSignal.timeout(12000)});
-    const j2 = await r2.json();
-    if (Array.isArray(j2.result)) {
-      const aavePool = (chain.aavePool||'').toLowerCase();
-      j2.result
-        .filter(tx=>tx.to?.toLowerCase()===aavePool && tx.isError==='0')
-        .forEach(tx=>{
-          const sig = (tx.input||'').slice(0,10);
-          const type = AAVE_SIGS[sig];
-          if (!type) return;
-          // Avoid duplicates by txhash
-          if (events.find(e=>e.txhash===tx.hash)) return;
-          events.push({
-            type, chain: chainKey,
-            timestamp: parseInt(tx.timeStamp),
-            asset: '—',
-            amountCrypto: 0,
-            amountUSD: 0,
-            txhash: tx.hash||'',
+  // Fallback: txlist filtering by AAVE pool (direct calls)
+  if (!events.length && aavePool) {
+    try {
+      const AAVE_SIGS = {
+        '0x617ba037':'supply','0xe8eda9df':'supply','0x02c205f0':'supply',
+        '0xa415bcad':'borrow','0xd5eed868':'borrow',
+        '0x573ade81':'repay','0x2dad97d4':'repay','0xe311ef9b':'repay',
+        '0x69328dec':'withdraw',
+      };
+      const url2 = `${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=1000&page=1`;
+      const r2 = await fetch(url2, {signal: AbortSignal.timeout(20000)});
+      const j2 = await r2.json();
+      if (Array.isArray(j2.result)) {
+        j2.result.filter(tx => tx.to?.toLowerCase() === aavePool && tx.isError === '0')
+          .forEach(tx => {
+            const sig = (tx.input || '').slice(0, 10);
+            const type = AAVE_SIGS[sig];
+            if (type && !events.find(e => e.txhash === tx.hash)) {
+              events.push({
+                type, chain: chainKey,
+                timestamp: parseInt(tx.timeStamp),
+                asset: '—',
+                amountCrypto: 0,
+                amountUSD: 0,
+                txhash: tx.hash || '',
+              });
+            }
           });
-        });
-    }
-  } catch(e) { console.warn('txlist failed:', chainKey, e.message); }
+        console.log(`txlist ${chainKey}: found ${events.length} AAVE events`);
+      }
+    } catch(e) { console.warn('txlist failed:', chainKey, e.message); }
+  }
 
-  // Fallback: use eth_getLogs with AAVE V3 event signatures (NO API key needed)
-  // This catches events where user is onBehalfOf (topic index 2)
+  // Final fallback: eth_getLogs (no API key, reads directly from blockchain)
   if (!events.length && chain.aavePool) {
     try {
       const AAVE_TOPICS = {
@@ -1746,59 +1792,44 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         '0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051': 'repay',
         '0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7': 'withdraw',
       };
-      // Pad user address for topic filter (32 bytes, left-padded with zeros)
-      const paddedAddr = '0x' + walletAddr.slice(2).toLowerCase().padStart(64,'0');
-      const rpcs = chain.rpcs || [chain.rpc].filter(Boolean);
-      for (const rpc of rpcs.slice(0,2)) {
+      const paddedAddr = '0x' + walletAddr.slice(2).toLowerCase().padStart(64, '0');
+      const rpcs = chain.rpcs || [];
+      for (const rpc of rpcs.slice(0, 2)) {
         try {
-          // Get latest block first
-          const blockRes = await fetch(rpc, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_blockNumber',params:[]}),
-            signal:AbortSignal.timeout(8000)
-          });
-          const blockJ = await blockRes.json();
-          const latestBlock = parseInt(blockJ.result, 16);
-          const fromBlock = Math.max(0, latestBlock - 500000); // last ~500k blocks
-          
-          // Fetch logs for each event type
           for (const [topic0, eventType] of Object.entries(AAVE_TOPICS)) {
             const logsRes = await fetch(rpc, {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({jsonrpc:'2.0',id:2,method:'eth_getLogs',params:[{
-                fromBlock:'0x'+fromBlock.toString(16),
-                toBlock:'latest',
-                address:chain.aavePool,
-                topics:[topic0, null, paddedAddr] // topic2 = onBehalfOf
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_getLogs',params:[{
+                fromBlock: '0x1',
+                toBlock: 'latest',
+                address: chain.aavePool,
+                topics: [topic0, null, paddedAddr]
               }]}),
-              signal:AbortSignal.timeout(15000)
+              signal: AbortSignal.timeout(20000)
             });
             const logsJ = await logsRes.json();
             if (Array.isArray(logsJ.result) && logsJ.result.length > 0) {
-              logsJ.result.forEach(log=>{
-                // Get block timestamp (approximate from block number)
-                const blockNum = parseInt(log.blockNumber, 16);
-                events.push({
-                  type: eventType, chain: chainKey,
-                  timestamp: 0, // will be 0 without extra call
-                  blockNumber: blockNum,
-                  asset: '—',
-                  amountCrypto: 0,
-                  amountUSD: 0,
-                  txhash: log.transactionHash||'',
-                });
+              logsJ.result.forEach(log => {
+                if (!events.find(e => e.txhash === log.transactionHash)) {
+                  events.push({
+                    type: eventType, chain: chainKey,
+                    timestamp: 0,
+                    blockNumber: parseInt(log.blockNumber, 16),
+                    asset: '—', amountCrypto: 0, amountUSD: 0,
+                    txhash: log.transactionHash || '',
+                  });
+                }
               });
               console.log(`eth_getLogs ${chainKey} ${eventType}: ${logsJ.result.length} events`);
             }
           }
-          if (events.length) break; // got results, stop trying RPCs
-        } catch(e) { console.warn('eth_getLogs via', rpc, e.message); }
+          if (events.length) break;
+        } catch(e) { console.warn('eth_getLogs', rpc, e.message); }
       }
-    } catch(e) { console.warn('eth_getLogs outer failed:', e.message); }
+    } catch(e) {}
   }
 
-  console.log(`History ${chainKey}: ${events.length} total events`);
-  return events.sort((a,b)=>b.timestamp-a.timestamp).slice(0,30);
+  return events.sort((a,b) => (b.timestamp||b.blockNumber||0) - (a.timestamp||a.blockNumber||0)).slice(0, 50);
 }
 
 // ══════════════════════════════════════════════════════════
