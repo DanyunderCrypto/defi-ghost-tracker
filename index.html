@@ -692,9 +692,10 @@ let state = {
 };
 
 let live = {
-  positions: {},  // {chainKey:{hf,totalCollateral,totalDebt,available,ltv,liqThreshold}}
-  history:   {},  // {chainKey:[events]}
-  eurRate:   1.08,// USD/EUR rate
+  positions: {},
+  history:   {},
+  eurRate:   0.92,
+  prices:    {}, // {symbol: usdPrice}
   lastRefresh: null,
 };
 
@@ -916,10 +917,25 @@ function requestNotifPerm() {
 
 async function fetchEurRate() {
   try {
-    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=usd&vs_currencies=eur', { signal: AbortSignal.timeout(5000) });
-    // Fallback — just use 0.92
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,bitcoin,usd-coin,tether,weth,wrapped-bitcoin&vs_currencies=usd,eur', {signal: AbortSignal.timeout(8000)});
+    const j = await r.json();
+    if (j.ethereum)   live.prices['ETH']  = live.prices['WETH'] = j.ethereum.usd;
+    if (j.bitcoin)    live.prices['BTC']  = live.prices['WBTC'] = j.bitcoin.usd;
+    if (j['usd-coin'])live.prices['USDC'] = live.prices['USDbC']= live.prices['USDT'] = j['usd-coin'].usd;
+    if (j.ethereum?.eur) live.eurRate = 1/j.ethereum.eur * j.ethereum.usd * 0.92;
+    live.eurRate = j.ethereum ? (j['usd-coin']?.eur || 0.92) : 0.92;
+    console.log('Prices loaded:', live.prices);
+  } catch(e) { 
     live.eurRate = 0.92;
-  } catch(e) { live.eurRate = 0.92; }
+    // Fallback static prices
+    live.prices = {ETH:3500, WETH:3500, BTC:95000, WBTC:95000, USDC:1, USDT:1, DAI:1, USDbC:1};
+  }
+}
+
+function getUsdPrice(asset) {
+  if (!asset) return 0;
+  const sym = asset.toUpperCase().replace(/^(VARIABLE|STABLE)DEBT/i,'');
+  return live.prices[sym] || live.prices[sym.replace(/^A/,'')] || 0;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1004,8 +1020,8 @@ function renderDashboard(w) {
   const activePos = allPos.filter(([,p])=>p&&(p.totalCollateral>0||p.totalDebt>0));
   let minHF = null;
   allPos.forEach(([,p])=>{ if(p?.hf!==null&&p?.hf!==undefined){ if(minHF===null||p.hf<minHF) minHF=p.hf; }});
-  const totalCol = activePos.reduce((s,[,p])=>s+(p.totalCollateral||0),0);
-  const totalDebt = activePos.reduce((s,[,p])=>s+(p.totalDebt||0),0);
+  const totalCol = activePos.reduce((s,[,p])=>s+(p.totalCollateral||0),0) + (live.positions['morpho']?.totalCollateral||0);
+  const totalDebt = activePos.reduce((s,[,p])=>s+(p.totalDebt||0),0) + (live.positions['morpho']?.totalDebt||0);
   const gLTV = totalCol>0?(totalDebt/totalCol*100):0;
   const cols = state.collateral.filter(c=>c.walletId===w.id);
   const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365).length;
@@ -1195,6 +1211,8 @@ function renderProtocols(w) {
         // Positions for AAVE are stored by chain key directly; other protocols would need their own storage
 const isActive = key==='aave'
   ? proto.chains.some(c=>live.positions[c]?.totalCollateral>0)
+  : key==='morpho'
+  ? (live.positions['morpho']?.totalCollateral||0)>0
   : proto.chains.some(c=>live.positions[`${key}_${c}`]?.totalCollateral>0);
         const logoClass = `logo-${key}`;
         return `<div class="proto-card${activeProto===key?' active':''}" onclick="setProto('${key}')">
@@ -1230,15 +1248,41 @@ const isActive = key==='aave'
 }
 
 function getProtoCollateral(proto, w) {
-  if (proto === 'aave') return Object.values(live.positions).reduce((s,p)=>s+(p?.totalCollateral||0),0);
+  if (proto === 'aave') return Object.entries(live.positions).filter(([k])=>k!=='morpho').reduce((s,[,p])=>s+(p?.totalCollateral||0),0);
+  if (proto === 'morpho') return live.positions['morpho']?.totalCollateral||0;
   return Object.entries(live.positions).filter(([k])=>k.startsWith(proto+'_')).reduce((s,[,p])=>s+(p?.totalCollateral||0),0);
 }
 function getProtoDebt(proto, w) {
-  if (proto === 'aave') return Object.values(live.positions).reduce((s,p)=>s+(p?.totalDebt||0),0);
+  if (proto === 'aave') return Object.entries(live.positions).filter(([k])=>k!=='morpho').reduce((s,[,p])=>s+(p?.totalDebt||0),0);
+  if (proto === 'morpho') return live.positions['morpho']?.totalDebt||0;
   return Object.entries(live.positions).filter(([k])=>k.startsWith(proto+'_')).reduce((s,[,p])=>s+(p?.totalDebt||0),0);
 }
 
 function renderProtoDetail(proto, chain, w) {
+  // Morpho uses its own position store
+  if (proto === 'morpho') {
+    const mp = live.positions['morpho'];
+    if (!mp || !mp.totalCollateral) return `<div class="empty"><span class="empty-icon">📡</span><p style="font-size:0.85rem">A buscar posições Morpho Blue...<br>A usar a API oficial do Morpho (sem API key necessária).<br><button class="btn btn-gold btn-sm" style="margin-top:0.75rem" onclick="refreshAll()">↻ Actualizar</button></p></div>`;
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.5rem">
+        ${[['Supply Total','$'+fmt(mp.totalCollateral),'var(--gold)'],['Borrow Total','$'+fmt(mp.totalDebt),'var(--amber)'],['LTV',fmt(mp.ltv||0,1)+'%',mp.ltv>80?'var(--red)':mp.ltv>60?'var(--gold)':'var(--green)']].map(([l,v,c])=>`
+          <div class="panel" style="padding:1rem;border:none;background:var(--bg2)">
+            <div class="stat-label">${l}</div>
+            <div style="font-family:var(--display);font-size:1.5rem;color:${c};margin-top:0.25rem">${v}</div>
+          </div>`).join('')}
+      </div>
+      ${mp.positions?.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Loan</th><th>Collateral</th><th>Supply USD</th><th>Borrow USD</th><th>Supply APY</th><th>Borrow APY</th></tr></thead>
+        <tbody>${mp.positions.map(pos=>`<tr>
+          <td style="font-weight:600">${pos.loan}</td>
+          <td>${pos.collateral}</td>
+          <td class="mono gold">$${fmt(pos.supplyUsd)}</td>
+          <td class="mono amber">$${fmt(pos.borrowUsd)}</td>
+          <td class="mono green">${pos.supplyApy?(pos.supplyApy*100).toFixed(2)+'%':'—'}</td>
+          <td class="mono red">${pos.borrowApy?(pos.borrowApy*100).toFixed(2)+'%':'—'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : ''}`;
+  }
   const key = `${proto}_${chain}`;
   const p = live.positions[key] || live.positions[chain]; // fallback to AAVE
   if (!p) return `<div class="empty"><span class="empty-icon">📡</span><p style="font-size:0.85rem">Sem posição activa em ${PROTOCOLS[proto]?.name} na rede ${CHAINS[chain]?.name}.<br>Clica Refresh para actualizar.</p></div>`;
@@ -1761,6 +1805,10 @@ function renderSettings(w) {
           <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('linea')">▶ Testar Alchemy (Linea)</button>
           <button class="btn btn-ghost btn-sm" onclick="testHistoryAPI('base')">Etherscan Base</button>
         </div>
+        <div class="alert alert-info" style="font-size:0.78rem;margin-bottom:0.75rem">
+          <span>ℹ</span><div>Wallet activa: <strong style="color:var(--gold)">${activeWallet()?.addr||'nenhuma'}</strong><br>
+          Se as tuas transacções AAVE foram feitas com outra wallet, adiciona essa wallet nas Wallets e activa-a.</div>
+        </div>
         <div id="histDiagResult" style="font-family:var(--mono);font-size:0.72rem;line-height:1.7;word-break:break-all"></div>
       </div>
     </div>
@@ -1876,12 +1924,13 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         if (isDebtToken(sym) && fromUser) type = 'repay';
         if (type) {
           const cleanAsset = sym.replace(/^a(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/i,'').replace(/^(variable|stable)Debt.*/i,'DEBT').replace(/^a/,'') || sym;
+          const price = getUsdPrice(cleanAsset);
           events.push({
             type, chain: chainKey,
             timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
             asset: cleanAsset,
             amountCrypto: tx.value || 0,
-            amountUSD: 0,
+            amountUSD: (tx.value || 0) * price,
             txhash: tx.hash || '',
             rawSymbol: sym,
           });
@@ -2062,15 +2111,103 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 // ══════════════════════════════════════════════════════════
 // REFRESH ALL
 // ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// MORPHO BLUE POSITIONS (via Morpho API)
+// ══════════════════════════════════════════════════════════
+async function fetchMorphoPositions(walletAddr) {
+  if (!walletAddr) return;
+  try {
+    // Morpho has a free GraphQL API
+    const query = `{
+      userByAddress(address: "${walletAddr.toLowerCase()}") {
+        address
+        marketPositions {
+          supplyAssets
+          supplyAssetsUsd
+          borrowAssets
+          borrowAssetsUsd
+          market {
+            uniqueKey
+            loanAsset { symbol address decimals }
+            collateralAsset { symbol address decimals }
+            oracleAddress
+            lltv
+            state { borrowApy supplyApy }
+          }
+        }
+      }
+    }`;
+    const r = await fetch('https://blue-api.morpho.org/graphql', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query}),
+      signal: AbortSignal.timeout(15000)
+    });
+    const j = await r.json();
+    const user = j.data?.userByAddress;
+    if (!user?.marketPositions?.length) {
+      console.log('Morpho: no positions found for', walletAddr);
+      return;
+    }
+    let totalSupply = 0, totalBorrow = 0;
+    const positions = [];
+    user.marketPositions.forEach(pos => {
+      const supplyUsd = pos.supplyAssetsUsd || 0;
+      const borrowUsd = pos.borrowAssetsUsd || 0;
+      if (supplyUsd > 0 || borrowUsd > 0) {
+        totalSupply += supplyUsd;
+        totalBorrow += borrowUsd;
+        positions.push({
+          market: pos.market?.uniqueKey?.slice(0,8)||'?',
+          loan: pos.market?.loanAsset?.symbol || '?',
+          collateral: pos.market?.collateralAsset?.symbol || '?',
+          supplyUsd, borrowUsd,
+          supplyApy: pos.market?.state?.supplyApy,
+          borrowApy: pos.market?.state?.borrowApy,
+        });
+        console.log(`Morpho position: supply $${supplyUsd.toFixed(2)} borrow $${borrowUsd.toFixed(2)} loan=${pos.market?.loanAsset?.symbol}`);
+      }
+    });
+    // Store as a synthetic "morpho" position
+    live.positions['morpho'] = {
+      hf: totalBorrow > 0 ? (totalSupply * 0.9) / totalBorrow : null,
+      totalCollateral: totalSupply,
+      totalDebt: totalBorrow,
+      available: totalSupply * 0.8 - totalBorrow,
+      ltv: totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
+      positions,
+      source: 'morpho_api'
+    };
+    console.log(`Morpho total: supply $${totalSupply.toFixed(2)} borrow $${totalBorrow.toFixed(2)}`);
+    // Re-render to show Morpho data
+    render();
+  } catch(e) {
+    console.warn('Morpho API failed:', e.message);
+    // Fallback: try Morpho subgraph
+    try {
+      const r2 = await fetch('https://api.thegraph.com/subgraphs/name/morpho-labs/morpho-blue-mainnet', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query:`{positions(where:{user:"${walletAddr.toLowerCase()}",shares_gt:"0"}){shares market{id totalSupplyAssets totalBorrowAssets loanToken{symbol}}}}`}),
+        signal: AbortSignal.timeout(10000)
+      });
+    } catch(e2) {}
+  }
+}
+
 async function refreshAll() {
   const w = activeWallet();
   if (!w) return;
   const btn = document.getElementById('refreshBtn');
   if (btn) { btn.textContent='...'; btn.disabled=true; }
   const chainKeys = Object.keys(CHAINS);
-  // Fetch HF for all chains in parallel
-  const hfResults = await Promise.all(chainKeys.map(k=>fetchHF(k,w.addr).then(p=>({k,p}))));
+  // Fetch prices + HF in parallel
+  const [,hfResults] = await Promise.all([
+    fetchEurRate(),
+    Promise.all(chainKeys.map(k=>fetchHF(k,w.addr).then(p=>({k,p})))),
+  ]);
   hfResults.forEach(({k,p})=>{ live.positions[k]=p; });
+  // Fetch Morpho positions
+  fetchMorphoPositions(w.addr).catch(e=>console.warn('Morpho fetch failed:', e));
   // Store HF history snapshot
   const now = Date.now();
   chainKeys.forEach(k=>{
