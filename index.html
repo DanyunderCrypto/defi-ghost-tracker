@@ -765,7 +765,8 @@ async function testAlchemyAPI(chainKey) {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
         fromBlock:'0x0', toBlock:'latest', toAddress: w.addr,
-        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x14'
+        order: 'desc',
+        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x32'
       }]}),
       signal: AbortSignal.timeout(20000)
     });
@@ -775,9 +776,18 @@ async function testAlchemyAPI(chainKey) {
     lines.push(`<span style="color:var(--green)">✓ Alchemy funcionou! ${txs.length} transferências encontradas</span>`);
     const syms = [...new Set(txs.map(t=>t.asset).filter(Boolean))];
     lines.push(`<span style="color:var(--muted)">Símbolos: ${syms.join(', ')||'nenhum'}</span>`);
-    const atokens = txs.filter(t=>/^a[A-Z]/.test(t.asset||''));
-    lines.push(`<span style="color:${atokens.length>0?'var(--green)':'var(--gold)'}">aTokens AAVE: ${atokens.length} (${atokens.map(t=>t.asset).join(', ')||'nenhum encontrado'})</span>`);
-    txs.slice(0,5).forEach(t=>{ lines.push(`<span style="color:var(--white)">${t.metadata?.blockTimestamp?.slice(0,10)||'?'} | ${t.asset} | ${t.value} | tx:${t.hash?.slice(0,12)}...</span>`); });
+    const SKIP = ['AAVE','ARB','APES','AVAX','ALGO','ADA','ATOM','APT'];
+    const atokens = txs.filter(t=>/^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset));
+    const aLabel = atokens.length > 0 ? atokens.map(t=>t.asset).join(', ') : 'nenhum';
+    const aColor = atokens.length > 0 ? 'var(--green)' : 'var(--gold)';
+    lines.push('<span style="color:'+aColor+'">aTokens AAVE: '+atokens.length+' ('+aLabel+')</span>');
+    lines.push('<span style="color:var(--muted)">-- 10 transferencias mais recentes --</span>');
+    txs.slice(0,10).forEach(function(t){
+      const isA = /^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset);
+      const date = (t.metadata && t.metadata.blockTimestamp) ? t.metadata.blockTimestamp.slice(0,10) : '?';
+      const col = isA ? 'var(--green)' : 'var(--white)';
+      lines.push('<span style="color:'+col+'">'+date+' | '+(t.asset||'?')+' | '+Number(t.value||0).toFixed(4)+' | tx:'+((t.hash||'').slice(0,12))+'...</span>');
+    });
   } catch(e) {
     lines.push(`<span style="color:var(--red)">❌ ${e.message}</span>`);
   }
@@ -1817,7 +1827,12 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
   if (alchemyKey && ALCHEMY_RPCS[chainKey]) {
     try {
       const alchemyRpc = ALCHEMY_RPCS[chainKey] + alchemyKey;
-      const isAToken = (sym) => sym && (/^a[A-Z]/.test(sym) && !['AAVE','ARB','APES','AVAX'].includes(sym));
+      const KNOWN_AAVE_TOKENS = new Set(['aBasUSDC','aBaseWETH','aBasWETH','aBasCbETH','aBaswstETH','aBasUSDbC','aBaseUSDbC','aBasGHO','aBasRETH','aBasEth','aUSDC','aWETH']);
+      const isAToken = (sym) => {
+        if (!sym) return false;
+        if (KNOWN_AAVE_TOKENS.has(sym)) return true;
+        return /^a[A-Z]/.test(sym) && !['AAVE','ARB','APES','AVAX','ALGO','ADA','ATOM','APT'].includes(sym);
+      };
       const isDebtToken = (sym) => sym && sym.toLowerCase().includes('debt');
 
       // Get transfers TO wallet (aToken mints = supply; debtToken mints = borrow)
@@ -1826,7 +1841,8 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
           fromBlock:'0x0', toBlock:'latest',
           toAddress: walletAddr,
-          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
+          order: 'desc',
+          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x3e8'
         }]}),
         signal: AbortSignal.timeout(20000)
       });
@@ -1839,7 +1855,8 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
           fromBlock:'0x0', toBlock:'latest',
           fromAddress: walletAddr,
-          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
+          order: 'desc',
+          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x3e8'
         }]}),
         signal: AbortSignal.timeout(20000)
       });
