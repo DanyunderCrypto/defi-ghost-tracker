@@ -624,14 +624,14 @@ td.muted  { color:var(--muted); }
 // NETWORK & PROTOCOL CONFIG
 // ══════════════════════════════════════════════════════════
 const CHAINS = {
-  eth:      { name:'Ethereum',  id:1,      color:'#627EEA', rpc:'https://ethereum.publicnode.com',          explorer:'https://etherscan.io',          explorerApi:'https://api.etherscan.io/api',         aavePool:'0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', morphoBlue:'0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb', compV3Usdc:'0xc3d688B66703497DAA19211EEdff47f25384cdc3' },
-  base:     { name:'Base',      id:8453,   color:'#0052FF', rpc:'https://base.publicnode.com',              explorer:'https://basescan.org',           explorerApi:'https://api.basescan.org/api',          aavePool:'0xA238Dd80C259a72e81d7e4664a9801593F98d1c5', morphoBlue:'0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb', compV3Usdc:'0xb125E6687d4313864e53df431d5425969c15Eb2' },
-  arbitrum: { name:'Arbitrum',  id:42161,  color:'#28A0F0', rpc:'https://arbitrum-one.publicnode.com',      explorer:'https://arbiscan.io',            explorerApi:'https://api.arbiscan.io/api',           aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD', compV3Usdc:'0x9c4ec768c28032803d6d0d09c55e73E75f2aEa89' },
-  optimism: { name:'Optimism',  id:10,     color:'#FF0420', rpc:'https://optimism.publicnode.com',          explorer:'https://optimistic.etherscan.io',explorerApi:'https://api-optimistic.etherscan.io/api',aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
-  polygon:  { name:'Polygon',   id:137,    color:'#8247E5', rpc:'https://polygon-bor.publicnode.com',       explorer:'https://polygonscan.com',         explorerApi:'https://api.polygonscan.com/api',       aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD', compV3Usdc:'0xF25212E676D1F7F89Cd72fFEe66158f541246445' },
-  scroll:   { name:'Scroll',    id:534352, color:'#FFDBB1', rpc:'https://rpc.scroll.io',                   explorer:'https://scrollscan.com',          explorerApi:'https://api.scrollscan.com/api',        aavePool:'0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
-  gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpc:'https://rpc.gnosischain.com',             explorer:'https://gnosisscan.io',           explorerApi:'https://api.gnosisscan.io/api',         sparkPool:'0x2Dae5307c5E3FD1CF5A72Cb6F698f915514d4b59' },
-  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpc:'https://rpc.linea.build',                 explorer:'https://lineascan.build',         explorerApi:'https://api.lineascan.build/api',       aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9' },
+  eth:      { name:'Ethereum',  id:1,      color:'#627EEA', rpcs:['https://cloudflare-eth.com','https://ethereum.publicnode.com','https://rpc.ankr.com/eth'], explorer:'https://etherscan.io',          explorerApi:'https://api.etherscan.io/api',          aavePool:'0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2' },
+  base:     { name:'Base',      id:8453,   color:'#0052FF', rpcs:['https://mainnet.base.org','https://base.publicnode.com','https://base.llamarpc.com'],    explorer:'https://basescan.org',           explorerApi:'https://api.basescan.org/api',          aavePool:'0xA238Dd80C259a72e81d7e4664a9801593F98d1c5' },
+  arbitrum: { name:'Arbitrum',  id:42161,  color:'#28A0F0', rpcs:['https://arb1.arbitrum.io/rpc','https://arbitrum-one.publicnode.com'],                    explorer:'https://arbiscan.io',            explorerApi:'https://api.arbiscan.io/api',           aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
+  optimism: { name:'Optimism',  id:10,     color:'#FF0420', rpcs:['https://mainnet.optimism.io','https://optimism.publicnode.com'],                          explorer:'https://optimistic.etherscan.io',explorerApi:'https://api-optimistic.etherscan.io/api',aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
+  polygon:  { name:'Polygon',   id:137,    color:'#8247E5', rpcs:['https://polygon-rpc.com','https://polygon-bor.publicnode.com'],                           explorer:'https://polygonscan.com',         explorerApi:'https://api.polygonscan.com/api',       aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
+  scroll:   { name:'Scroll',    id:534352, color:'#FFDBB1', rpcs:['https://rpc.scroll.io'],                                                                  explorer:'https://scrollscan.com',          explorerApi:'https://api.scrollscan.com/api',        aavePool:'0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
+  gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpcs:['https://rpc.gnosischain.com','https://gnosis-rpc.publicnode.com'],                        explorer:'https://gnosisscan.io',           explorerApi:'https://api.gnosisscan.io/api',         aavePool:'0x2Dae5307c5E3FD1CF5A72Cb6F698f915514d4b59' },
+  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://rpc.linea.build'],                                                                explorer:'https://lineascan.build',         explorerApi:'https://api.lineascan.build/api',       aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9' },
 };
 
 const PROTOCOLS = {
@@ -724,6 +724,30 @@ function saveState() {
   const s = JSON.stringify(state);
   localStorage.setItem('ghost2_state', s);
   try { window.storage.set('ghost2_state', s); } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════════
+// CONNECTION TEST
+// ══════════════════════════════════════════════════════════
+async function runConnectionTest() {
+  const w = activeWallet();
+  const el = document.getElementById('connTestResults');
+  if (!el) return;
+  if (!w?.addr) { el.innerHTML='<span style="color:var(--red)">⚠ Nenhuma wallet configurada</span>'; return; }
+  el.innerHTML = '<span style="color:var(--muted)">A testar...</span>';
+  const results = [];
+  for (const [key, chain] of Object.entries(CHAINS)) {
+    if (!chain.aavePool) { results.push(`<span style="color:var(--muted)">— ${chain.name}: sem pool AAVE</span>`); continue; }
+    const p = await fetchHF(key, w.addr);
+    if (p && (p.totalCollateral > 0 || p.totalDebt > 0)) {
+      results.push(`<span style="color:var(--green)">✓ ${chain.name}: HF=${p.hf?.toFixed(3)||'∞'} Col=$${fmt(p.totalCollateral)} Debt=$${fmt(p.totalDebt)}</span>`);
+    } else if (p !== null) {
+      results.push(`<span style="color:var(--muted)">○ ${chain.name}: sem posição activa</span>`);
+    } else {
+      results.push(`<span style="color:var(--red)">✗ ${chain.name}: falha na ligação</span>`);
+    }
+  }
+  el.innerHTML = results.join('');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1561,6 +1585,15 @@ function renderSettings(w) {
       </div>
     </div>
     <div class="panel" style="margin-top:1.3rem">
+      <div class="panel-head"><span class="panel-title">⬡ Teste de Conexão RPC</span></div>
+      <div class="panel-body">
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Verifica se a app consegue ligar a cada rede e ler a tua posição AAVE.</p>
+        <button class="btn btn-gold btn-sm" onclick="runConnectionTest()">▶ Testar Conexão Agora</button>
+        <div id="connTestResults" style="margin-top:1rem;font-family:var(--mono);font-size:0.75rem;display:flex;flex-direction:column;gap:0.4rem"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1.3rem">
       <div class="panel-head"><span class="panel-title">Widget HF Flutuante</span></div>
       <div class="panel-body" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
         <p style="color:var(--muted);font-size:0.85rem">O widget flutuante mostra o HF mínimo em qualquer tab. Podes arrastá-lo para qualquer canto.</p>
@@ -1583,45 +1616,67 @@ function renderSettings(w) {
 async function fetchHF(chainKey, walletAddr) {
   const chain = CHAINS[chainKey];
   if (!chain?.aavePool || !walletAddr) return null;
-  try {
-    const sig = '0xbf92857c';
-    const padded = walletAddr.slice(2).toLowerCase().padStart(64,'0');
-    const res = await fetch(chain.rpc, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:chain.aavePool,data:sig+padded},'latest']}),
-      signal:AbortSignal.timeout(10000)
-    });
-    const j = await res.json();
-    if (!j.result||j.result==='0x') return null;
-    const h = j.result.slice(2);
-    const dec = (off)=>BigInt('0x'+(h.slice(off*64,off*64+64)||'0'));
-    const MAX = BigInt('115792089237316195423570985008687907853269984665640564039457584007913129639935');
-    const hfRaw = dec(5);
-    const hf = hfRaw >= MAX ? null : Number(hfRaw)/1e18;
-    return { hf, totalCollateral:Number(dec(0))/1e8, totalDebt:Number(dec(1))/1e8, available:Number(dec(2))/1e8, ltv:Number(dec(4))/100, liqThreshold:Number(dec(3)) };
-  } catch(e) { return null; }
+  const rpcs = chain.rpcs || [chain.rpc].filter(Boolean);
+  const sig = '0xbf92857c';
+  const padded = walletAddr.slice(2).toLowerCase().padStart(64,'0');
+  const body = JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:chain.aavePool,data:sig+padded},'latest']});
+  for (const rpc of rpcs) {
+    try {
+      const res = await fetch(rpc, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body,
+        signal:AbortSignal.timeout(8000)
+      });
+      if (!res.ok) continue;
+      const j = await res.json();
+      if (!j.result || j.result==='0x' || j.result.length < 100) continue;
+      const h = j.result.slice(2);
+      const dec = (off)=>BigInt('0x'+(h.slice(off*64,off*64+64)||'0'));
+      const MAX = BigInt('115792089237316195423570985008687907853269984665640564039457584007913129639935');
+      const hfRaw = dec(5);
+      const hf = hfRaw >= MAX ? null : Number(hfRaw)/1e18;
+      const result = { hf, totalCollateral:Number(dec(0))/1e8, totalDebt:Number(dec(1))/1e8, available:Number(dec(2))/1e8, ltv:Number(dec(4))/100, liqThreshold:Number(dec(3)), rpc };
+      console.log(`✓ ${chainKey} via ${rpc}: HF=${hf?.toFixed(3)}`);
+      return result;
+    } catch(e) { console.warn(`✗ ${chainKey} via ${rpc}:`, e.message); }
+  }
+  return null;
 }
 
-// Etherscan history
+// Etherscan history — using txlist to find AAVE interactions
+const AAVE_SIGS = {
+  '0x617ba037':'supply', '0xe8eda9df':'deposit',
+  '0xa415bcad':'borrow', '0x573ade81':'repay',
+  '0x69328dec':'withdraw', '0x2dad97d4':'repayWithATokens',
+  '0xe311ef9b':'repayWithPermit', '0xd65f8804':'liquidationCall',
+};
+
 async function fetchHistory(chainKey, walletAddr, apiKey) {
   const chain = CHAINS[chainKey];
   if (!chain?.explorerApi || !walletAddr || !apiKey) return [];
   try {
-    const aavePool = chain.aavePool||'';
-    const url = `${chain.explorerApi}?module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=50&page=1`;
+    // Get transactions where user called AAVE pool
+    const url = `${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=40&page=1`;
     const res = await fetch(url, {signal:AbortSignal.timeout(12000)});
     const j = await res.json();
-    if (j.status!=='1'||!Array.isArray(j.result)) return [];
-    return j.result.slice(0,30).map(tx=>({
-      type: tx.to?.toLowerCase()===aavePool.toLowerCase()?'supply':tx.from?.toLowerCase()===aavePool.toLowerCase()?'borrow':'transfer',
-      chain: chainKey,
-      timestamp: parseInt(tx.timeStamp),
-      asset: tx.tokenSymbol||'?',
-      amountCrypto: Number(tx.value)/Math.pow(10,parseInt(tx.tokenDecimal)||18),
-      amountUSD: 0,
-      txhash: tx.hash||'',
-    }));
-  } catch(e) { return []; }
+    if (!Array.isArray(j.result)) return [];
+    const aavePool = (chain.aavePool||'').toLowerCase();
+    return j.result
+      .filter(tx => tx.to?.toLowerCase()===aavePool && tx.isError==='0')
+      .slice(0,20)
+      .map(tx=>{
+        const sig = tx.input?.slice(0,10)||'';
+        const type = AAVE_SIGS[sig] || 'interact';
+        return {
+          type, chain: chainKey,
+          timestamp: parseInt(tx.timeStamp),
+          asset: '—',
+          amountCrypto: 0,
+          amountUSD: Number(tx.value)/1e18 * 3500, // rough ETH value
+          txhash: tx.hash||'',
+          gasUsed: tx.gasUsed,
+        };
+      });
+  } catch(e) { console.warn('History fetch failed:', chainKey, e.message); return []; }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2074,7 +2129,8 @@ document.addEventListener('click', e=>{ if(!document.getElementById('walletSwitc
 function saveApiKey() {
   const w=activeWallet(); if(!w)return;
   w.apiKey=document.getElementById('set_apikey')?.value?.trim()||'';
-  saveState(); toast('API Key guardada ✓','success');
+  saveState(); toast('API Key guardada ✓ — A actualizar dados...','success');
+  setTimeout(refreshAll, 500);
 }
 
 function saveTelegram() {
