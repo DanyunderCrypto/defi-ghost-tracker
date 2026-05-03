@@ -824,7 +824,7 @@ async function testAlchemyAPI(chainKey) {
       body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
         fromBlock:'0x0', toBlock:'latest', toAddress: w.addr,
         order: 'desc',
-        contractAddresses: [...(AAVE_ATOKEN_CONTRACTS[chainKey+'_supply']||[]),(AAVE_ATOKEN_CONTRACTS[chainKey+'_debt']||[])].flat(),
+        contractAddresses: (AAVE_ATOKEN_CONTRACTS[chainKey+'_supply']||[]).concat(AAVE_ATOKEN_CONTRACTS[chainKey+'_debt']||[]),
         category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
       }]}),
       signal: AbortSignal.timeout(20000)
@@ -848,7 +848,9 @@ async function testAlchemyAPI(chainKey) {
       lines.push('<span style="color:'+col+'">'+date+' | '+(t.asset||'?')+' | '+Number(t.value||0).toFixed(4)+' | tx:'+((t.hash||'').slice(0,12))+'...</span>');
     });
   } catch(e) {
-    lines.push(`<span style="color:var(--red)">❌ ${e.message}</span>`);
+    const msg = (e && e.message) ? e.message : String(e);
+    lines.push('<span style="color:var(--red)">Erro: '+msg+'</span>');
+    if (msg.includes('fetch')) lines.push('<span style="color:var(--gold)">Possivel bloqueio CORS ou Alchemy key invalida</span>');
   }
   el.innerHTML = lines.join('<br>');
 }
@@ -1270,7 +1272,7 @@ function renderProtocols(w) {
 const isActive = key==='aave'
   ? proto.chains.some(c=>live.positions[c]?.totalCollateral>0)
   : key==='morpho'
-  ? (live.positions['morpho']?.totalCollateral||0)>0
+  ? ((live.positions['morpho']?.totalCollateral||0)>0 || (live.positions['morpho']?.totalDebt||0)>0)
   : proto.chains.some(c=>live.positions[`${key}_${c}`]?.totalCollateral>0);
         const logoClass = `logo-${key}`;
         return `<div class="proto-card${activeProto===key?' active':''}" onclick="setProto('${key}')">
@@ -1323,18 +1325,24 @@ function renderProtoDetail(proto, chain, w) {
     if (!mp || !mp.totalCollateral) return `<div class="empty"><span class="empty-icon">📡</span><p style="font-size:0.85rem">A buscar posições Morpho Blue...<br>A usar a API oficial do Morpho (sem API key necessária).<br><button class="btn btn-gold btn-sm" style="margin-top:0.75rem" onclick="refreshAll()">↻ Actualizar</button></p></div>`;
     return `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.5rem">
-        ${[['Supply Total','$'+fmt(mp.totalCollateral),'var(--gold)'],['Borrow Total','$'+fmt(mp.totalDebt),'var(--amber)'],['LTV',fmt(mp.ltv||0,1)+'%',mp.ltv>80?'var(--red)':mp.ltv>60?'var(--gold)':'var(--green)']].map(([l,v,c])=>`
+        ${[
+          ['Colateral + Supply','$'+fmt(mp.totalCollateral),'var(--gold)'],
+          ['Dívida Total','$'+fmt(mp.totalDebt),'var(--amber)'],
+          ['LTV',fmt(mp.ltv||0,1)+'%',mp.ltv>80?'var(--red)':mp.ltv>60?'var(--gold)':'var(--green)'],
+          ['Disponível est.','$'+fmt(mp.available||0),'var(--blue)'],
+        ].map(([l,v,c])=>`
           <div class="panel" style="padding:1rem;border:none;background:var(--bg2)">
             <div class="stat-label">${l}</div>
             <div style="font-family:var(--display);font-size:1.5rem;color:${c};margin-top:0.25rem">${v}</div>
           </div>`).join('')}
       </div>
       ${mp.positions?.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Loan</th><th>Collateral</th><th>Supply USD</th><th>Borrow USD</th><th>Supply APY</th><th>Borrow APY</th></tr></thead>
+        <thead><tr><th>Mercado</th><th>Token Emprestado</th><th>Supply (yield)</th><th>Colateral (borrow)</th><th>Dívida</th><th>Supply APY</th><th>Borrow APY</th></tr></thead>
         <tbody>${mp.positions.map(pos=>`<tr>
+          <td><span style="font-size:0.8rem;color:var(--muted)">${pos.collateral}/${pos.loan}</span></td>
           <td style="font-weight:600">${pos.loan}</td>
-          <td>${pos.collateral}</td>
           <td class="mono gold">$${fmt(pos.supplyUsd)}</td>
+          <td class="mono gold">$${fmt(pos.collateralUsd)}</td>
           <td class="mono amber">$${fmt(pos.borrowUsd)}</td>
           <td class="mono green">${pos.supplyApy?(pos.supplyApy*100).toFixed(2)+'%':'—'}</td>
           <td class="mono red">${pos.borrowApy?(pos.borrowApy*100).toFixed(2)+'%':'—'}</td>
@@ -2184,13 +2192,14 @@ async function fetchMorphoPositions(walletAddr) {
           supplyAssetsUsd
           borrowAssets
           borrowAssetsUsd
+          collateral
+          collateralUsd
           market {
             uniqueKey
-            loanAsset { symbol address decimals }
-            collateralAsset { symbol address decimals }
-            oracleAddress
+            loanAsset { symbol address decimals priceUsd }
+            collateralAsset { symbol address decimals priceUsd }
             lltv
-            state { borrowApy supplyApy }
+            state { borrowApy supplyApy liquidityAssetsUsd }
           }
         }
       }
@@ -2210,33 +2219,50 @@ async function fetchMorphoPositions(walletAddr) {
     let totalSupply = 0, totalBorrow = 0;
     const positions = [];
     user.marketPositions.forEach(pos => {
-      const supplyUsd = pos.supplyAssetsUsd || 0;
-      const borrowUsd = pos.borrowAssetsUsd || 0;
-      if (supplyUsd > 0 || borrowUsd > 0) {
-        totalSupply += supplyUsd;
-        totalBorrow += borrowUsd;
-        positions.push({
-          market: pos.market?.uniqueKey?.slice(0,8)||'?',
-          loan: pos.market?.loanAsset?.symbol || '?',
-          collateral: pos.market?.collateralAsset?.symbol || '?',
-          supplyUsd, borrowUsd,
-          supplyApy: pos.market?.state?.supplyApy,
-          borrowApy: pos.market?.state?.borrowApy,
-        });
-        console.log(`Morpho position: supply $${supplyUsd.toFixed(2)} borrow $${borrowUsd.toFixed(2)} loan=${pos.market?.loanAsset?.symbol}`);
-      }
+      const supplyUsd    = pos.supplyAssetsUsd || 0;
+      const borrowUsd    = pos.borrowAssetsUsd || 0;
+      // collateralUsd = value of collateral deposited to back a borrow position
+      const collateralUsd = pos.collateralUsd || 0;
+
+      const hasActivity = supplyUsd > 0 || borrowUsd > 0 || collateralUsd > 0;
+      if (!hasActivity) return;
+
+      // In Morpho Blue:
+      // - supplyUsd = yield-earning deposits (like AAVE supply)
+      // - collateralUsd = locked collateral backing a borrow
+      // - borrowUsd = outstanding debt
+      const colSideUsd = supplyUsd + collateralUsd; // total "locked" value
+      totalSupply += colSideUsd;
+      totalBorrow += borrowUsd;
+
+      positions.push({
+        loan:        pos.market?.loanAsset?.symbol || '?',
+        collateral:  pos.market?.collateralAsset?.symbol || '?',
+        supplyUsd,
+        collateralUsd,
+        borrowUsd,
+        supplyApy:  pos.market?.state?.supplyApy,
+        borrowApy:  pos.market?.state?.borrowApy,
+        lltv:       pos.market?.lltv,
+      });
+      console.log(`Morpho pos: supply=$${supplyUsd.toFixed(2)} collateral=$${collateralUsd.toFixed(2)} borrow=$${borrowUsd.toFixed(2)} [${pos.market?.loanAsset?.symbol}/${pos.market?.collateralAsset?.symbol}]`);
     });
-    // Store as a synthetic "morpho" position
+
+    // Health factor for Morpho borrow positions (lltv-based)
+    const morphoHF = totalBorrow > 0
+      ? (totalSupply * 0.86) / totalBorrow  // 86% avg lltv approximation
+      : null;
+
     live.positions['morpho'] = {
-      hf: totalBorrow > 0 ? (totalSupply * 0.9) / totalBorrow : null,
+      hf:             morphoHF,
       totalCollateral: totalSupply,
-      totalDebt: totalBorrow,
-      available: totalSupply * 0.8 - totalBorrow,
-      ltv: totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
+      totalDebt:       totalBorrow,
+      available:       Math.max(0, totalSupply * 0.8 - totalBorrow),
+      ltv:             totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
       positions,
-      source: 'morpho_api'
+      source: 'morpho_api',
     };
-    console.log(`Morpho total: supply $${totalSupply.toFixed(2)} borrow $${totalBorrow.toFixed(2)}`);
+    console.log(`Morpho total: collateral+supply=$${totalSupply.toFixed(2)} borrow=$${totalBorrow.toFixed(2)}`);
     // Re-render to show Morpho data
     render();
   } catch(e) {
