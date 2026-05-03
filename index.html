@@ -727,6 +727,79 @@ function saveState() {
 }
 
 // ══════════════════════════════════════════════════════════
+// HISTORY DIAGNOSTIC
+// ══════════════════════════════════════════════════════════
+async function testHistoryAPI(chainKey) {
+  const w = activeWallet();
+  const el = document.getElementById('histDiagResult');
+  if (!el) return;
+  if (!w?.addr) { el.innerHTML = '<span style="color:var(--red)">Sem wallet configurada</span>'; return; }
+  if (!w?.apiKey) { el.innerHTML = '<span style="color:var(--red)">Sem API Key configurada — vai a Config e guarda a API Key</span>'; return; }
+
+  const chain = CHAINS[chainKey];
+  if (!chain?.explorerApi) { el.innerHTML = `<span style="color:var(--red)">Chain ${chainKey} não tem explorerApi</span>`; return; }
+
+  el.innerHTML = `<span style="color:var(--muted)">A testar ${chain.name}... (pode demorar 5-10s)</span>`;
+
+  const url = `${chain.explorerApi}?module=account&action=tokentx&address=${w.addr}&startblock=0&endblock=99999999&sort=desc&apikey=${w.apiKey}&offset=20&page=1`;
+  const displayUrl = url.replace(w.apiKey, '***KEY***');
+
+  let lines = [`<span style="color:var(--muted)">URL: ${displayUrl}</span>`];
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    const statusCode = res.status;
+    lines.push(`<span style="color:var(--muted)">HTTP Status: ${statusCode}</span>`);
+
+    if (!res.ok) {
+      lines.push(`<span style="color:var(--red)">❌ HTTP Error ${statusCode} — o Basescan bloqueou o pedido</span>`);
+      el.innerHTML = lines.join('<br>');
+      return;
+    }
+
+    const j = await res.json();
+    lines.push(`<span style="color:var(--muted)">API Status: "${j.status}" | Message: "${j.message}"</span>`);
+
+    if (j.status === '0') {
+      lines.push(`<span style="color:var(--red)">❌ API respondeu com erro: ${j.message} — ${JSON.stringify(j.result).slice(0,100)}</span>`);
+      if (j.message?.includes('Invalid')) lines.push(`<span style="color:var(--gold)">⚠ A tua API Key pode não ser válida para ${chain.name}. Tenta criar uma key em basescan.org directamente.</span>`);
+      el.innerHTML = lines.join('<br>');
+      return;
+    }
+
+    const txs = j.result || [];
+    lines.push(`<span style="color:var(--green)">✓ API funcionou! ${txs.length} transferências encontradas</span>`);
+
+    if (txs.length === 0) {
+      lines.push(`<span style="color:var(--muted)">Sem transferências ERC20 para este endereço em ${chain.name}</span>`);
+    } else {
+      // Show all token symbols found
+      const symbols = [...new Set(txs.map(t => t.tokenSymbol).filter(Boolean))];
+      lines.push(`<span style="color:var(--muted)">Símbolos encontrados: ${symbols.join(', ')}</span>`);
+
+      // Check which match aToken pattern
+      const aTokensFound = txs.filter(t => /^a[A-Z]/.test(t.tokenSymbol||''));
+      lines.push(`<span style="color:${aTokensFound.length>0?'var(--green)':'var(--gold)'}">aTokens detectados: ${aTokensFound.length} (${aTokensFound.map(t=>t.tokenSymbol).join(', ')||'nenhum'})</span>`);
+
+      // Show first 5 raw transfers
+      lines.push(`<span style="color:var(--muted)">── Últimas 5 transferências ──</span>`);
+      txs.slice(0,5).forEach(t => {
+        const date = new Date(parseInt(t.timeStamp)*1000).toLocaleDateString('pt-PT');
+        lines.push(`<span style="color:var(--white)">${date} | ${t.tokenSymbol} | from:${t.from?.slice(0,8)}... to:${t.to?.slice(0,8)}... | ${(Number(t.value)/Math.pow(10,parseInt(t.tokenDecimal)||18)).toFixed(4)}</span>`);
+      });
+    }
+  } catch(e) {
+    lines.push(`<span style="color:var(--red)">❌ Erro: ${e.message}</span>`);
+    if (e.name === 'AbortError') lines.push(`<span style="color:var(--gold)">Timeout — a API demorou mais de 20 segundos a responder</span>`);
+    if (e.message?.includes('CORS') || e.message?.includes('fetch')) {
+      lines.push(`<span style="color:var(--gold)">⚠ Possível bloqueio CORS — o Basescan pode estar a bloquear pedidos da tua origem</span>`);
+    }
+  }
+
+  el.innerHTML = lines.join('<br>');
+}
+
+// ══════════════════════════════════════════════════════════
 // CONNECTION TEST
 // ══════════════════════════════════════════════════════════
 async function runConnectionTest() {
@@ -1605,6 +1678,19 @@ function renderSettings(w) {
         <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Verifica se a app consegue ligar a cada rede e ler a tua posição AAVE.</p>
         <button class="btn btn-gold btn-sm" onclick="runConnectionTest()">▶ Testar Conexão Agora</button>
         <div id="connTestResults" style="margin-top:1rem;font-family:var(--mono);font-size:0.75rem;display:flex;flex-direction:column;gap:0.4rem"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1.3rem">
+      <div class="panel-head"><span class="panel-title">🔍 Diagnóstico de Histórico</span></div>
+      <div class="panel-body">
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Testa directamente a API do Basescan e mostra o que foi encontrado.</p>
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
+          <button class="btn btn-gold btn-sm" onclick="testHistoryAPI('base')">▶ Testar Basescan (Base)</button>
+          <button class="btn btn-outline btn-sm" onclick="testHistoryAPI('eth')">▶ Testar Etherscan (ETH)</button>
+          <button class="btn btn-outline btn-sm" onclick="testHistoryAPI('linea')">▶ Testar Lineascan</button>
+        </div>
+        <div id="histDiagResult" style="font-family:var(--mono);font-size:0.72rem;line-height:1.7;word-break:break-all"></div>
       </div>
     </div>
 
