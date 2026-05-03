@@ -630,8 +630,8 @@ const CHAINS = {
   optimism: { name:'Optimism',  id:10,     color:'#FF0420', rpcs:['https://mainnet.optimism.io','https://optimism.publicnode.com'],                          explorer:'https://optimistic.etherscan.io',explorerApi:'https://api-optimistic.etherscan.io/api',aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
   polygon:  { name:'Polygon',   id:137,    color:'#8247E5', rpcs:['https://polygon-rpc.com','https://polygon-bor.publicnode.com'],                           explorer:'https://polygonscan.com',         explorerApi:'https://api.polygonscan.com/api',       aavePool:'0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
   scroll:   { name:'Scroll',    id:534352, color:'#FFDBB1', rpcs:['https://rpc.scroll.io'],                                                                  explorer:'https://scrollscan.com',          explorerApi:'https://api.scrollscan.com/api',        aavePool:'0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
-  gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpcs:['https://rpc.gnosischain.com','https://gnosis-rpc.publicnode.com'],                        explorer:'https://gnosisscan.io',           explorerApi:'https://api.gnosisscan.io/api',         aavePool:'0x2Dae5307c5E3FD1CF5A72Cb6F698f915514d4b59' },
-  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://rpc.linea.build'],                                                                explorer:'https://lineascan.build',         explorerApi:'https://api.lineascan.build/api',       aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9' },
+  gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpcs:['https://gnosis.drpc.org','https://gnosis.publicnode.com','https://rpc.gnosischain.com','https://1rpc.io/gnosis'], explorer:'https://gnosisscan.io', explorerApi:'https://api.gnosisscan.io/api', aavePool:'0xb50201558B00496A145fE76f7424749556E326D8' },
+  linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://linea.drpc.org','https://rpc.linea.build','https://1rpc.io/linea','https://linea.blockpi.network/v1/rpc/public'], explorer:'https://lineascan.build', explorerApi:'https://api.lineascan.build/api', aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9' },
 };
 
 const PROTOCOLS = {
@@ -744,7 +744,7 @@ async function runConnectionTest() {
     } else if (p !== null) {
       results.push(`<span style="color:var(--muted)">○ ${chain.name}: sem posição activa</span>`);
     } else {
-      results.push(`<span style="color:var(--red)">✗ ${chain.name}: falha na ligação</span>`);
+      results.push(`<span style="color:var(--muted)">✗ ${chain.name}: sem resposta (pode não ter posição ou RPC temporariamente indisponível)</span>`);
     }
   }
   el.innerHTML = results.join('');
@@ -815,6 +815,7 @@ function render() {
 
 function afterRender() {
   updateHFPill();
+  updateWidget();
   buildWalletDD();
   if (currentTab === 'simulator') initSimulator();
   if (currentTab === 'dashboard') startInterestTicker();
@@ -1628,8 +1629,8 @@ async function fetchHF(chainKey, walletAddr) {
   for (const rpc of rpcs) {
     try {
       const res = await fetch(rpc, {
-        method:'POST', headers:{'Content-Type':'application/json'}, body,
-        signal:AbortSignal.timeout(8000)
+        method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body,
+        signal:AbortSignal.timeout(12000)
       });
       if (!res.ok) continue;
       const j = await res.json();
@@ -1805,6 +1806,8 @@ function checkAlerts(w) {
   });
   updateHFPill();
   updateWidget();
+  // If widget is visible, make sure it has the latest value
+  if (widgetVisible) updateWidget();
 }
 
 function updateHFPill() {
@@ -1824,15 +1827,19 @@ function updateAvatarState(state) {
 }
 
 function updateWidget() {
-  const w = document.getElementById('hfWidget');
+  const widget = document.getElementById('hfWidget');
   const num = document.getElementById('hfWidgetNum');
-  if (!w||!num) return;
+  if (!widget||!num) return;
   let minHF=null;
   Object.values(live.positions).forEach(p=>{ if(p?.hf!==null&&p?.hf!==undefined){if(minHF===null||p.hf<minHF)minHF=p.hf;}});
-  if (!minHF) return;
+  if (minHF===null) {
+    num.textContent='—';
+    num.className='hf-widget-num sv-muted';
+    return;
+  }
   num.textContent = minHF.toFixed(2);
   num.className = minHF<1.2?'hf-widget-num sv-red':minHF<1.5?'hf-widget-num sv-gold':'hf-widget-num sv-green';
-  w.className = 'hf-widget '+(minHF<1.2?'danger':minHF<1.5?'warn':'safe');
+  widget.className = 'hf-widget '+(minHF<1.2?'danger':minHF<1.5?'warn':'safe');
 }
 
 function pushNotif(title, body) {
@@ -2323,6 +2330,7 @@ function toggleWidget() {
   widgetVisible=!widgetVisible;
   const w=document.getElementById('hfWidget');
   if(w) w.classList.toggle('hidden',!widgetVisible);
+  if(widgetVisible) updateWidget(); // refresh value when shown
 }
 
 // ══════════════════════════════════════════════════════════
