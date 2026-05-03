@@ -1043,7 +1043,10 @@ function renderProtocols(w) {
     <div class="three-col" style="margin-bottom:1.5rem">
       ${protos.map(([key,proto])=>{
         const p = live.positions[`${key}_${activeChain}`] || null;
-        const isActive = proto.chains.some(c=>live.positions[`${key}_${c}`]?.totalCollateral>0);
+        // Positions for AAVE are stored by chain key directly; other protocols would need their own storage
+const isActive = key==='aave'
+  ? proto.chains.some(c=>live.positions[c]?.totalCollateral>0)
+  : proto.chains.some(c=>live.positions[`${key}_${c}`]?.totalCollateral>0);
         const logoClass = `logo-${key}`;
         return `<div class="proto-card${activeProto===key?' active':''}" onclick="setProto('${key}')">
           <div class="proto-header">
@@ -1078,9 +1081,11 @@ function renderProtocols(w) {
 }
 
 function getProtoCollateral(proto, w) {
+  if (proto === 'aave') return Object.values(live.positions).reduce((s,p)=>s+(p?.totalCollateral||0),0);
   return Object.entries(live.positions).filter(([k])=>k.startsWith(proto+'_')).reduce((s,[,p])=>s+(p?.totalCollateral||0),0);
 }
 function getProtoDebt(proto, w) {
+  if (proto === 'aave') return Object.values(live.positions).reduce((s,p)=>s+(p?.totalDebt||0),0);
   return Object.entries(live.positions).filter(([k])=>k.startsWith(proto+'_')).reduce((s,[,p])=>s+(p?.totalDebt||0),0);
 }
 
@@ -1642,41 +1647,101 @@ async function fetchHF(chainKey, walletAddr) {
   return null;
 }
 
-// Etherscan history — using txlist to find AAVE interactions
+// Etherscan/Explorer history — uses ERC20 token transfers to detect AAVE activity
 const AAVE_SIGS = {
-  '0x617ba037':'supply', '0xe8eda9df':'deposit',
-  '0xa415bcad':'borrow', '0x573ade81':'repay',
-  '0x69328dec':'withdraw', '0x2dad97d4':'repayWithATokens',
-  '0xe311ef9b':'repayWithPermit', '0xd65f8804':'liquidationCall',
+  '0x617ba037':'supply','0xe8eda9df':'supply','0x02c205f0':'supply',
+  '0xa415bcad':'borrow','0xd5eed868':'borrow',
+  '0x573ade81':'repay','0x2dad97d4':'repay','0xe311ef9b':'repay',
+  '0x69328dec':'withdraw','0x8e19899e':'withdraw',
+  '0xd65f8804':'liquidation',
 };
+
+// Known aToken prefixes (to detect AAVE token transfers)
+const ATOKEN_NAMES = ['aEth','aBase','aArb','aOpt','aPol','aScr','aGno','aLin','aUSDC','aWETH','aWBTC','aDAI','aUSDT','aToken'];
 
 async function fetchHistory(chainKey, walletAddr, apiKey) {
   const chain = CHAINS[chainKey];
   if (!chain?.explorerApi || !walletAddr || !apiKey) return [];
+  const events = [];
   try {
-    // Get transactions where user called AAVE pool
-    const url = `${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=40&page=1`;
-    const res = await fetch(url, {signal:AbortSignal.timeout(12000)});
-    const j = await res.json();
-    if (!Array.isArray(j.result)) return [];
-    const aavePool = (chain.aavePool||'').toLowerCase();
-    return j.result
-      .filter(tx => tx.to?.toLowerCase()===aavePool && tx.isError==='0')
-      .slice(0,20)
-      .map(tx=>{
-        const sig = tx.input?.slice(0,10)||'';
-        const type = AAVE_SIGS[sig] || 'interact';
-        return {
-          type, chain: chainKey,
-          timestamp: parseInt(tx.timeStamp),
-          asset: '—',
-          amountCrypto: 0,
-          amountUSD: Number(tx.value)/1e18 * 3500, // rough ETH value
-          txhash: tx.hash||'',
-          gasUsed: tx.gasUsed,
-        };
+    // 1. Get ERC20 token transfers — catches aToken mints/burns (AAVE supply/withdraw)
+    const r1 = await fetch(`${chain.explorerApi}?module=account&action=tokentx&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=50&page=1`, {signal:AbortSignal.timeout(12000)});
+    const j1 = await r1.json();
+    if (Array.isArray(j1.result)) {
+      j1.result.forEach(tx=>{
+        const sym = tx.tokenSymbol||'';
+        const isAtoken = ATOKEN_NAMES.some(a=>sym.startsWith(a)) || sym.startsWith('a');
+        const aavePool = (chain.aavePool||'').toLowerCase();
+        const isFromPool = tx.from?.toLowerCase()===aavePool;
+        const isToPool = tx.to?.toLowerCase()===aavePool;
+        let type = null;
+        if (isAtoken && isFromPool) type = 'supply';     // received aToken FROM pool = supplied
+        else if (isAtoken && isToPool) type = 'withdraw'; // sent aToken TO pool = withdrew
+        else if (sym.includes('Debt') || sym.includes('debt')) {
+          type = isFromPool ? 'borrow' : 'repay';
+        }
+        if (type) {
+          events.push({
+            type, chain: chainKey,
+            timestamp: parseInt(tx.timeStamp),
+            asset: sym.replace(/^a(Eth|Base|Arb|Opt|Pol|Scr|Gno|Lin)?/,'') || sym,
+            amountCrypto: Number(tx.value)/Math.pow(10,parseInt(tx.tokenDecimal)||18),
+            amountUSD: 0,
+            txhash: tx.hash||'',
+          });
+        }
       });
-  } catch(e) { console.warn('History fetch failed:', chainKey, e.message); return []; }
+    }
+  } catch(e) { console.warn('tokentx failed:', chainKey, e.message); }
+
+  try {
+    // 2. Get normal transactions TO AAVE pool (direct calls)
+    const r2 = await fetch(`${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=30&page=1`, {signal:AbortSignal.timeout(12000)});
+    const j2 = await r2.json();
+    if (Array.isArray(j2.result)) {
+      const aavePool = (chain.aavePool||'').toLowerCase();
+      j2.result
+        .filter(tx=>tx.to?.toLowerCase()===aavePool && tx.isError==='0')
+        .forEach(tx=>{
+          const sig = (tx.input||'').slice(0,10);
+          const type = AAVE_SIGS[sig];
+          if (!type) return;
+          // Avoid duplicates by txhash
+          if (events.find(e=>e.txhash===tx.hash)) return;
+          events.push({
+            type, chain: chainKey,
+            timestamp: parseInt(tx.timeStamp),
+            asset: '—',
+            amountCrypto: 0,
+            amountUSD: 0,
+            txhash: tx.hash||'',
+          });
+        });
+    }
+  } catch(e) { console.warn('txlist failed:', chainKey, e.message); }
+
+  // Also try: ALL recent txs if nothing found (fallback)
+  if (!events.length) {
+    try {
+      const r3 = await fetch(`${chain.explorerApi}?module=account&action=txlist&address=${walletAddr}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}&offset=20&page=1`, {signal:AbortSignal.timeout(10000)});
+      const j3 = await r3.json();
+      if (Array.isArray(j3.result) && j3.result.length > 0) {
+        j3.result.slice(0,10).forEach(tx=>{
+          events.push({
+            type:'tx', chain: chainKey,
+            timestamp: parseInt(tx.timeStamp),
+            asset: tx.to?.slice(0,8)||'?',
+            amountCrypto: Number(tx.value)/1e18,
+            amountUSD: 0,
+            txhash: tx.hash||'',
+          });
+        });
+      }
+    } catch(e) {}
+  }
+
+  console.log(`History ${chainKey}: ${events.length} events`);
+  return events.sort((a,b)=>b.timestamp-a.timestamp).slice(0,25);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1701,10 +1766,14 @@ async function refreshAll() {
       if (live.hfHistory[k].length>50) live.hfHistory[k].shift();
     }
   });
-  // Fetch history if API key
+  // Fetch history if API key — only for chains with positions + ethereum always
   if (w.apiKey) {
-    const histResults = await Promise.all(chainKeys.map(k=>fetchHistory(k,w.addr,w.apiKey).then(h=>({k,h}))));
-    histResults.forEach(({k,h})=>{ if(h.length) live.history[k]=h; });
+    const chainsToFetch = chainKeys.filter(k=> live.positions[k]?.totalCollateral > 0 || live.positions[k]?.totalDebt > 0 || k==='eth' || k==='base');
+    if (chainsToFetch.length === 0) chainsToFetch.push('eth','base'); // fallback
+    const histResults = await Promise.allSettled(chainsToFetch.map(k=>fetchHistory(k,w.addr,w.apiKey).then(h=>({k,h}))));
+    histResults.forEach(r=>{ if(r.status==='fulfilled'&&r.value.h.length) live.history[r.value.k]=r.value.h; });
+  } else {
+    console.log('No API key — skipping history fetch. Add key in Config tab.');
   }
   live.lastRefresh = new Date().toLocaleTimeString('pt-PT');
   checkAlerts(w);
