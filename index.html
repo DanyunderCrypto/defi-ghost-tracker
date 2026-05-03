@@ -468,7 +468,16 @@ td.muted  { color:var(--muted); }
       <div class="form-group form-full"><label class="form-label">Nome</label><input class="form-input" id="w_name" placeholder="ex: Wallet Principal DeFi"></div>
       <div class="form-group form-full"><label class="form-label">Endereço EVM (AAVE/Morpho/etc.) *</label><input class="form-input" id="w_addr" placeholder="0x..."><span class="form-note">Usado para buscar posições on-chain automaticamente</span></div>
       <div class="form-group form-full"><label class="form-label">Endereço Solana (Kamino/Jupiter)</label><input class="form-input" id="w_sol" placeholder="...Solana public key..."></div>
-      <div class="form-group form-full"><label class="form-label">Etherscan API Key</label><input class="form-input" id="w_apikey" placeholder="Cole a tua API key gratuita do Etherscan"><span class="form-note">Grátis em etherscan.io → My Account → API Keys. Necessária para histórico de transações.</span></div>
+      <div class="form-group form-full">
+        <label class="form-label">Alchemy API Key <span style="color:var(--green)">(Recomendado — funciona em todas as chains)</span></label>
+        <input class="form-input" id="w_alchemy_key" placeholder="Cole a tua API key do Alchemy">
+        <span class="form-note">Grátis em alchemy.com → Create App → escolhe a chain → copia a API Key. Funciona para Base, ETH, Arbitrum, Linea, etc.</span>
+      </div>
+      <div class="form-group form-full">
+        <label class="form-label">Etherscan API Key <span style="color:var(--muted)">(alternativa — só ETH mainnet no plano free)</span></label>
+        <input class="form-input" id="w_apikey" placeholder="Cole a tua API key do Etherscan (opcional)">
+        <span class="form-note">etherscan.io → My Account → API Keys. Só funciona para ETH mainnet no plano gratuito.</span>
+      </div>
       <div class="form-group form-full"><label class="form-label">Telegram Bot Token (para alertas)</label><input class="form-input" id="w_tg_token" placeholder="1234567890:AAF..."><span class="form-note">Cria um bot em @BotFather. Deixa em branco para não usar alertas Telegram.</span></div>
       <div class="form-group form-full"><label class="form-label">Telegram Chat ID</label><input class="form-input" id="w_tg_chat" placeholder="-1001234567890 ou o teu user ID"></div>
     </div>
@@ -634,6 +643,18 @@ const CHAINS = {
   linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://linea.drpc.org','https://linea.publicnode.com','https://rpc.linea.build','https://linea-mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'], explorer:'https://lineascan.build', explorerApi:'https://api.lineascan.build/api', aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9', },
 };
 
+// Alchemy RPC base URLs per chain (requires API key)
+const ALCHEMY_RPCS = {
+  eth:      'https://eth-mainnet.g.alchemy.com/v2/',
+  base:     'https://base-mainnet.g.alchemy.com/v2/',
+  arbitrum: 'https://arb-mainnet.g.alchemy.com/v2/',
+  optimism: 'https://opt-mainnet.g.alchemy.com/v2/',
+  polygon:  'https://polygon-mainnet.g.alchemy.com/v2/',
+  scroll:   'https://scroll-mainnet.g.alchemy.com/v2/',
+  gnosis:   null,
+  linea:    'https://linea-mainnet.g.alchemy.com/v2/',
+};
+
 const PROTOCOLS = {
   aave:     { name:'AAVE V3',         color:'#B6509E', chains:['eth','base','arbitrum','optimism','polygon','scroll','linea'], hasHF:true },
   morpho:   { name:'Morpho Blue',     color:'#1C55FE', chains:['eth','base'],                                                  hasHF:true },
@@ -729,6 +750,40 @@ function saveState() {
 // ══════════════════════════════════════════════════════════
 // HISTORY DIAGNOSTIC
 // ══════════════════════════════════════════════════════════
+async function testAlchemyAPI(chainKey) {
+  const w = activeWallet();
+  const el = document.getElementById('histDiagResult');
+  if (!el) return;
+  if (!w?.alchemyKey) { el.innerHTML = '<span style="color:var(--gold)">⚠ Sem Alchemy API Key. Adiciona em Config → Guardar Keys.</span>'; return; }
+  if (!ALCHEMY_RPCS[chainKey]) { el.innerHTML = `<span style="color:var(--muted)">Alchemy não suporta ${chainKey}</span>`; return; }
+
+  el.innerHTML = `<span style="color:var(--muted)">A testar Alchemy ${chainKey}...</span>`;
+  const rpc = ALCHEMY_RPCS[chainKey] + w.alchemyKey;
+  const lines = [`<span style="color:var(--muted)">RPC: ${rpc.replace(w.alchemyKey,'***KEY***')}</span>`];
+  try {
+    const res = await fetch(rpc, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
+        fromBlock:'0x0', toBlock:'latest', toAddress: w.addr,
+        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x14'
+      }]}),
+      signal: AbortSignal.timeout(20000)
+    });
+    const j = await res.json();
+    if (j.error) { lines.push(`<span style="color:var(--red)">❌ Erro: ${j.error.message}</span>`); el.innerHTML=lines.join('<br>'); return; }
+    const txs = j.result?.transfers || [];
+    lines.push(`<span style="color:var(--green)">✓ Alchemy funcionou! ${txs.length} transferências encontradas</span>`);
+    const syms = [...new Set(txs.map(t=>t.asset).filter(Boolean))];
+    lines.push(`<span style="color:var(--muted)">Símbolos: ${syms.join(', ')||'nenhum'}</span>`);
+    const atokens = txs.filter(t=>/^a[A-Z]/.test(t.asset||''));
+    lines.push(`<span style="color:${atokens.length>0?'var(--green)':'var(--gold)'}">aTokens AAVE: ${atokens.length} (${atokens.map(t=>t.asset).join(', ')||'nenhum encontrado'})</span>`);
+    txs.slice(0,5).forEach(t=>{ lines.push(`<span style="color:var(--white)">${t.metadata?.blockTimestamp?.slice(0,10)||'?'} | ${t.asset} | ${t.value} | tx:${t.hash?.slice(0,12)}...</span>`); });
+  } catch(e) {
+    lines.push(`<span style="color:var(--red)">❌ ${e.message}</span>`);
+  }
+  el.innerHTML = lines.join('<br>');
+}
+
 async function testHistoryAPI(chainKey) {
   const w = activeWallet();
   const el = document.getElementById('histDiagResult');
@@ -1565,7 +1620,8 @@ function renderWallets() {
               <div style="font-family:var(--mono);font-size:0.72rem;color:var(--gold);margin-bottom:0.3rem">${w.addr||'—'}</div>
               ${w.sol?`<div style="font-family:var(--mono);font-size:0.7rem;color:var(--blue)">SOL: ${w.sol.slice(0,8)}...${w.sol.slice(-4)}</div>`:''}
               <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap">
-                <span class="badge ${hasApiKey?'badge-green':'badge-muted'}">${hasApiKey?'✓ API Key':'Sem API Key'}</span>
+                <span class="badge ${w.alchemyKey?'badge-green':'badge-muted'}">${w.alchemyKey?'✓ Alchemy Key':'Sem Alchemy Key'}</span>
+              <span class="badge ${hasApiKey?'badge-cyan':'badge-muted'}" style="font-size:0.56rem">${hasApiKey?'✓ Etherscan':'Sem Etherscan'}</span>
                 <span class="badge ${hasTg?'badge-blue':'badge-muted'}">${hasTg?'✓ Telegram':'Sem Telegram'}</span>
               </div>
             </div>
@@ -1655,9 +1711,12 @@ function renderSettings(w) {
       <div class="panel">
         <div class="panel-head"><span class="panel-title">Etherscan API Key</span></div>
         <div class="panel-body">
-          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem"><span>ℹ</span><div>Sem API Key o histórico de transações não funciona. Obter grátis:<br>1. Vai a <strong>etherscan.io</strong><br>2. Regista conta → My Account → API Keys<br>3. Cria uma key → copia e cola aqui</div></div>
-          <div class="form-group"><label class="form-label">API Key Activa</label><input class="form-input" id="set_apikey" value="${w.apiKey||''}" placeholder="Cole aqui a tua Etherscan API Key"></div>
-          <button class="btn btn-gold btn-sm" onclick="saveApiKey()">Guardar API Key</button>
+              <div class="alert alert-success" style="margin-bottom:1rem;font-size:0.8rem"><span>⭐</span><div><strong>Alchemy (recomendado)</strong> — funciona para todas as chains (Base, ETH, Arbitrum, Linea...):<br>1. <strong>alchemy.com</strong> → Sign Up grátis<br>2. Create App → selecciona a chain (ex: Base)<br>3. Copia a API Key e cola abaixo</div></div>
+          <div class="form-group"><label class="form-label">Alchemy API Key ${w.alchemyKey?'<span style=\'color:var(--green)\'>✓ Configurada</span>':''}</label><input class="form-input" id="set_alchemy_key" value="${w.alchemyKey||''}" placeholder="Alchemy API Key (funciona em todas as chains)"></div>
+          <div style="height:1px;background:var(--border);margin:1rem 0"></div>
+          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem"><span>ℹ</span><div><strong>Etherscan</strong> — alternativa, mas só funciona para ETH mainnet no plano gratuito.</div></div>
+          <div class="form-group"><label class="form-label">Etherscan API Key ${w.apiKey?'<span style=\'color:var(--muted)\'>✓ Configurada</span>':''}</label><input class="form-input" id="set_apikey" value="${w.apiKey||''}" placeholder="Etherscan API Key (opcional)"></div>
+          <button class="btn btn-gold btn-sm" onclick="saveApiKey()">Guardar Keys</button>
         </div>
       </div>
       <div class="panel">
@@ -1687,9 +1746,10 @@ function renderSettings(w) {
       <div class="panel-body">
         <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Testa directamente a API do Basescan e mostra o que foi encontrado.</p>
         <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
-          <button class="btn btn-gold btn-sm" onclick="testHistoryAPI('base')">▶ Testar Basescan (Base)</button>
-          <button class="btn btn-outline btn-sm" onclick="testHistoryAPI('eth')">▶ Testar Etherscan (ETH)</button>
-          <button class="btn btn-outline btn-sm" onclick="testHistoryAPI('linea')">▶ Testar Lineascan</button>
+          <button class="btn btn-gold btn-sm" onclick="testAlchemyAPI('base')">▶ Testar Alchemy (Base)</button>
+          <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('eth')">▶ Testar Alchemy (ETH)</button>
+          <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('linea')">▶ Testar Alchemy (Linea)</button>
+          <button class="btn btn-ghost btn-sm" onclick="testHistoryAPI('base')">Etherscan Base</button>
         </div>
         <div id="histDiagResult" style="font-family:var(--mono);font-size:0.72rem;line-height:1.7;word-break:break-all"></div>
       </div>
@@ -1744,19 +1804,81 @@ async function fetchHF(chainKey, walletAddr) {
   return null;
 }
 
-// Etherscan/Explorer history
-// Jan 2025 approximate start blocks per chain (to cover all of 2025)
-const JAN2025_BLOCKS = {
-  eth:1, base:1, arbitrum:1, optimism:1, polygon:1, scroll:1, gnosis:1, linea:1
-};
-// We use startblock=1 and page through with offset=1000 since user supplied in 2025
-
 async function fetchHistory(chainKey, walletAddr, apiKey) {
   const chain = CHAINS[chainKey];
   if (!chain?.explorerApi || !walletAddr || !apiKey) return [];
   const events = [];
   const userAddr = walletAddr.toLowerCase();
   const aavePool = (chain.aavePool||'').toLowerCase();
+  const w = activeWallet();
+  const alchemyKey = w?.alchemyKey;
+
+  // PRIMARY: Alchemy alchemy_getAssetTransfers (free, all chains, best coverage)
+  if (alchemyKey && ALCHEMY_RPCS[chainKey]) {
+    try {
+      const alchemyRpc = ALCHEMY_RPCS[chainKey] + alchemyKey;
+      const isAToken = (sym) => sym && (/^a[A-Z]/.test(sym) && !['AAVE','ARB','APES','AVAX'].includes(sym));
+      const isDebtToken = (sym) => sym && sym.toLowerCase().includes('debt');
+
+      // Get transfers TO wallet (aToken mints = supply; debtToken mints = borrow)
+      const r1 = await fetch(alchemyRpc, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
+          fromBlock:'0x0', toBlock:'latest',
+          toAddress: walletAddr,
+          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
+        }]}),
+        signal: AbortSignal.timeout(20000)
+      });
+      const j1 = await r1.json();
+      const inTransfers = j1.result?.transfers || [];
+
+      // Get transfers FROM wallet (aToken burns = withdraw; debtToken burns = repay)
+      const r2 = await fetch(alchemyRpc, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
+          fromBlock:'0x0', toBlock:'latest',
+          fromAddress: walletAddr,
+          category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
+        }]}),
+        signal: AbortSignal.timeout(20000)
+      });
+      const j2 = await r2.json();
+      const outTransfers = j2.result?.transfers || [];
+
+      console.log(`Alchemy ${chainKey}: ${inTransfers.length} in + ${outTransfers.length} out transfers`);
+
+      [...inTransfers, ...outTransfers].forEach(tx => {
+        const sym = tx.asset || '';
+        const toUser = tx.to?.toLowerCase() === userAddr;
+        const fromUser = tx.from?.toLowerCase() === userAddr;
+        let type = null;
+        if (isAToken(sym) && toUser)   type = 'supply';
+        if (isAToken(sym) && fromUser) type = 'withdraw';
+        if (isDebtToken(sym) && toUser)   type = 'borrow';
+        if (isDebtToken(sym) && fromUser) type = 'repay';
+        if (type) {
+          const cleanAsset = sym.replace(/^a(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/i,'').replace(/^(variable|stable)Debt.*/i,'DEBT').replace(/^a/,'') || sym;
+          events.push({
+            type, chain: chainKey,
+            timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
+            asset: cleanAsset,
+            amountCrypto: tx.value || 0,
+            amountUSD: 0,
+            txhash: tx.hash || '',
+            rawSymbol: sym,
+          });
+          console.log(`  Alchemy ✓ ${type}: ${tx.value} ${sym} → ${cleanAsset}`);
+        }
+      });
+
+      if (events.length > 0) {
+        console.log(`Alchemy ${chainKey}: found ${events.length} AAVE events`);
+        return events.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,50);
+      }
+    } catch(e) { console.warn('Alchemy history failed:', chainKey, e.message); }
+  }
+
 
   // AAVE aToken patterns for Base and all chains
   const isAToken = (sym) => {
@@ -2299,7 +2421,7 @@ function deleteCard(id) {
 function saveWallet() {
   const addr = document.getElementById('w_addr')?.value?.trim();
   if (!addr?.startsWith('0x')||addr.length!==42) { toast('Endereço EVM inválido','warn'); return; }
-  const w = { id:genId(), name:document.getElementById('w_name')?.value?.trim()||'Wallet', addr, sol:document.getElementById('w_sol')?.value?.trim()||'', apiKey:document.getElementById('w_apikey')?.value?.trim()||'', tgToken:document.getElementById('w_tg_token')?.value?.trim()||'', tgChat:document.getElementById('w_tg_chat')?.value?.trim()||'' };
+  const w = { id:genId(), name:document.getElementById('w_name')?.value?.trim()||'Wallet', addr, sol:document.getElementById('w_sol')?.value?.trim()||'', apiKey:document.getElementById('w_apikey')?.value?.trim()||'', alchemyKey:document.getElementById('w_alchemy_key')?.value?.trim()||'', tgToken:document.getElementById('w_tg_token')?.value?.trim()||'', tgChat:document.getElementById('w_tg_chat')?.value?.trim()||'' };
   state.wallets.push(w);
   if (!state.activeWId) state.activeWId=w.id;
   saveState(); closeModal('modalWallet');
@@ -2380,7 +2502,8 @@ document.addEventListener('click', e=>{ if(!document.getElementById('walletSwitc
 function saveApiKey() {
   const w=activeWallet(); if(!w)return;
   w.apiKey=document.getElementById('set_apikey')?.value?.trim()||'';
-  saveState(); toast('API Key guardada ✓ — A actualizar dados...','success');
+  w.alchemyKey=document.getElementById('set_alchemy_key')?.value?.trim()||'';
+  saveState(); toast('Keys guardadas ✓ — A actualizar dados...','success');
   setTimeout(refreshAll, 500);
 }
 
