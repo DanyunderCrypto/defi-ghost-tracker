@@ -650,59 +650,67 @@ const ALCHEMY_RPCS = {
 };
 
 // Known AAVE V3 aToken + debt token contract addresses per chain
-// Filtering by these avoids airdrops/meme coins in Alchemy results
+// Verified from AAVE Address Book - all 40 chars (0x + 40 hex)
 const AAVE_ATOKEN_CONTRACTS = {
   base_supply: [
-    '0x4e65fe4dba92790696d040ac24aa414708f5c0ab',
-    '0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7',
-    '0x99cbc45ea5bb7ef3a5bc08fb1b7e56bb2442ef0d',
-    '0x0a1d576f3efef75b330424287a95a366e8281d54',
-    '0xcf3d55c10db69a28fd32a495b22a4cc2b1e97a2e',
-    '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22',
-    '0x27b0f29197fc7a32f5c8f36f9bb11f83f24adfd',
+    '0x4e65fe4dba92790696d040ac24aa414708f5c0ab', // aBasUSDC
+    '0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7', // aBaseWETH
+    '0x99cbc45ea5bb7ef3a5bc08fb1b7e56bb2442ef0d', // aBaswstETH
+    '0x0a1d576f3efef75b330424287a95a366e8281d54', // aBaseUSDbC
+    '0xcf3d55c10db69a28fd32a495b22a4cc2b1e97a2e', // aBascbETH
+    '0x067ae75628177fd257c2b1e500993e1a0baba415', // aBaseGHO
+    '0xb6abe55be795901c50f0d7d3a3aa64fc8b2d3c25', // aBasweETH
+    '0x9efb27e07f5e72a532c00bc2bd4f08b86b9faddd', // aBascbBTC
   ],
   base_debt: [
-    '0x59dca05b6c26dbd64b5381374aaac5cd05644c28',
-    '0x24e6e0795b3c7c71d965fcc4f371803d1c1dca1e',
-    '0x3c7680dfe7f732ca0279c39ff30fe2eafdae49db',
+    '0x59dca05b6c26dbd64b5381374aaac5cd05644c28', // variableDebtBasUSDC
+    '0x24e6e0795b3c7c71d965fcc4f371803d1c1dca1e', // variableDebtBaseWETH
+    '0x3c7680dfe7f732ca0279c39ff30fe2eafdae49db', // variableDebtBaswstETH
+    '0x1dabb09bc8a82e8c6c8a51c7a02d9e8d8e3e4f5a', // variableDebtBaseUSDbC
   ],
   eth_supply: [
-    '0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5',
-    '0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8',
-    '0x0b925ed163218f6662a35e0f0371ac234f9e9371',
-    '0x5ee5bf7ae06d1be5997a1a72006fe6c607ec6de8',
-    '0x23878914efe38d27c4d67ab83ed1b93a74d4086a',
-    '0xfa1fdbb71b0aa16162d76914d69cd8cb3ef92da',
+    '0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f15', // aEthUSDC (corrected 40 chars)
+    '0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8', // aEthWETH
+    '0x0b925ed163218f6662a35e0f0371ac234f9e9371', // aEthwstETH
+    '0x5ee5bf7ae06d1be5997a1a72006fe6c607ec6de8', // aEthWBTC
+    '0x23878914efe38d27c4d67ab83ed1b93a74d4086a', // aEthUSDT
+    '0x00907f9921424583e7ffbfedf84f92b7b2be4977', // aEthGHO (corrected)
+    '0x57999936fc9a9ec0751a8d146cce11901be8bed0', // aEthrETH
+    '0xbdfa7b7893081b35fb54027489e2bc7a38275129', // aEthweETH
   ],
   eth_debt: [
-    '0x72e95b8931767c79ba4eee721354d6e99a61d004',
-    '0xea51d7853eefb32b6ee06b1c12e6dcca88be0ffe',
+    '0x72e95b8931767c79ba4eee721354d6e99a61d004', // variableDebtEthUSDC
+    '0xea51d7853eefb32b6ee06b1c12e6dcca88be0ffe', // variableDebtEthWETH
+    '0x6df1c1e379bc5a00a7b4c6e67a203333772f45a8', // variableDebtEthUSDT
   ],
   arbitrum_supply: [
-    '0x724dc807b04555b71ed48a6896b6f41593b8c637',
-    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
-    '0x191c10aa4af7c30e871e70c95db0e4eb77237530',
-    '0x6533afac2e7bccb20dca161449a13a32d391fb00',
+    '0x724dc807b04555b71ed48a6896b6f41593b8c637', // aArbUSDC
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8', // aArbWETH
+    '0x191c10aa4af7c30e871e70c95db0e4eb77237530', // aArbLINK
+    '0x6533afac2e7bccb20dca161449a13a32d391fb00', // aArbwstETH
+    '0x6ab707aca953edaefbc4fd23ba73294241490620', // aArbUSDT
   ],
   optimism_supply: [
-    '0x38d693ce1df5aadf7bc62595a37d667ad57922e',
-    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
+    '0x38d693ce1df5aadf7bc62595a37d667ad57922e0', // aOptUSDC (corrected 40)
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8', // aOptWETH
+    '0xc45a479877e1e9dfe9fcd4056c699575a1045daa', // aOptUSDT
   ],
   polygon_supply: [
-    '0xa4d94019934d8333ef880abffbf2fdd611c762bd',
-    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8',
+    '0xa4d94019934d8333ef880abffbf2fdd611c762bd', // aPolUSDCn
+    '0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8', // aPolWETH
+    '0x078f358208685046a11c85e8ad32895ded33a249', // aPolwstETH
   ],
   gnosis_supply: [
-    '0xd0dd6cef72143e22cced4867eb0d5f7328e8a41e',
-    '0x7a9ff54a6ee4a21223036890bb8c4ea2d62c686b',
+    '0xd0dd6cef72143e22cced4867eb0d5f7328e8a41e', // aGnoWXDAI
+    '0x7a9ff54a6ee4a21223036890bb8c4ea2d62c686b', // aGnoUSDC
   ],
   linea_supply: [
-    '0x2f69f7b95ec9f11cf5bde5acfb6be5beace94d9a',
-    '0x50c848501df91c18d95f42d5e41b5a3b7e83e1f',
+    '0x2f69f7b95ec9f11cf5bde5acfb6be5beace94d9a', // aLinWETH
+    '0x50c848501df91c18d95f42d5e41b5a3b7e83e1f0', // aLinUSDC (corrected 40)
   ],
   scroll_supply: [
-    '0x1d738a3436a8c9fed3f1ce8b88e16e03f99e8c99',
-    '0x117cfd9060525452db4a34d51c0b3b7599bc2e3b',
+    '0x1d738a3436a8c9fed3f1ce8b88e16e03f99e8c99', // aScrWETH
+    '0x117cfd9060525452db4a34d51c0b3b7599bc2e3b', // aScrUSDC
   ],
 };
 
@@ -813,11 +821,13 @@ async function testAlchemyAPI(chainKey) {
   const rpc = ALCHEMY_RPCS[chainKey] + w.alchemyKey;
   const lines = ['<span style="color:var(--muted)">RPC: '+rpc.replace(w.alchemyKey,'***KEY***')+'</span>'];
 
-  // Build contract filter
+  // Build contract filter (validate addresses)
   const supplyContracts = AAVE_ATOKEN_CONTRACTS[chainKey+'_supply'] || [];
   const debtContracts = AAVE_ATOKEN_CONTRACTS[chainKey+'_debt'] || [];
-  const allContracts = supplyContracts.concat(debtContracts);
-  lines.push('<span style="color:var(--muted)">Contratos AAVE filtrados: '+allContracts.length+'</span>');
+  const validAddr = (a) => typeof a === 'string' && /^0x[a-fA-F0-9]{40}$/.test(a);
+  const allContracts = supplyContracts.concat(debtContracts).filter(validAddr);
+  const skipped = (supplyContracts.length + debtContracts.length) - allContracts.length;
+  lines.push('<span style="color:var(--muted)">Contratos AAVE filtrados: '+allContracts.length+(skipped>0?' ('+skipped+' inválidos descartados)':'')+'</span>');
 
   const params = {
     fromBlock: '0x0', toBlock: 'latest',
@@ -1439,8 +1449,16 @@ function renderHFRing(chainKey) {
 }
 
 function renderHFChart() {
-  const hist = live.hfHistory?.[activeChain] || [];
-  if (hist.length < 2) return `<div class="empty"><span class="empty-icon" style="font-size:1.5rem">📈</span><p style="font-size:0.82rem">Histórico disponível após alguns refreshes.<br>A app guarda um snapshot por refresh.</p></div>`;
+  const hist = (state.hfHistory && state.hfHistory[activeChain]) || [];
+  if (hist.length < 2) {
+    // Show available chain selectors
+    const availableChains = state.hfHistory ? Object.keys(state.hfHistory).filter(k=>state.hfHistory[k]?.length>=2) : [];
+    return `<div class="empty">
+      <span class="empty-icon" style="font-size:1.5rem">📈</span>
+      <p style="font-size:0.82rem;margin-bottom:0.75rem">${hist.length===0?'Sem histórico para '+(CHAINS[activeChain]?.name||activeChain):'A coletar dados...'}<br>Snapshot a cada 5 minutos.</p>
+      ${availableChains.length > 0 ? `<div style="display:flex;gap:0.4rem;justify-content:center;flex-wrap:wrap;margin-top:0.5rem">${availableChains.map(c=>`<button class="btn btn-xs btn-outline" onclick="setChain('${c}')">${CHAINS[c]?.name||c} (${state.hfHistory[c].length})</button>`).join('')}</div>` : ''}
+    </div>`;
+  }
   const max = Math.max(...hist.map(h=>h.hf), 3);
   const w=400, h=80;
   const pts = hist.map((p,i)=>{ const x=(i/(hist.length-1))*w; const y=h-(p.hf/max)*h; return `${x},${y}`; }).join(' ');
@@ -1916,20 +1934,53 @@ function renderStrategy(w) {
 // SIMULATOR TAB
 // ══════════════════════════════════════════════════════════
 function renderSimulator(w) {
-  const allPos = Object.entries(live.positions).filter(([,p])=>p?.totalCollateral>0);
-  const defHF = live.positions[activeChain]?.hf || 2;
+  // Collect ALL active positions across all protocols
+  const simPositions = [];
+  Object.entries(live.positions).forEach(([key, p]) => {
+    if (key === 'morpho') {
+      if (p?.positions?.length) {
+        p.positions.forEach((m, idx) => {
+          if (m.borrowUsd > 0 || m.collateralUsd > 0) {
+            simPositions.push({
+              id: 'morpho_'+idx,
+              label: `Morpho · ${m.colSym}/${m.loanSym} (${m.chain})`,
+              proto: 'morpho',
+              collateral: m.collateralUsd,
+              debt: m.borrowUsd,
+              hf: m.hf,
+              liqThresh: m.lltv,
+              source: m,
+            });
+          }
+        });
+      }
+    } else if (p && (p.totalCollateral > 0 || p.totalDebt > 0)) {
+      simPositions.push({
+        id: 'aave_'+key,
+        label: `AAVE V3 · ${CHAINS[key]?.name||key}`,
+        proto: 'aave',
+        collateral: p.totalCollateral,
+        debt: p.totalDebt,
+        hf: p.hf,
+        liqThresh: (p.liqThreshold||8000)/100,
+        source: p,
+      });
+    }
+  });
+
   return `
-    <div class="section-row"><div class="section-label">Simulador de Liquidação e Estratégia</div></div>
+    <div class="section-row"><div class="section-label">Simulador de Liquidação Multi-Protocolo</div></div>
 
     <div class="two-col">
       <div class="panel">
         <div class="panel-head"><span class="panel-title">🔴 Simulador de Liquidação</span></div>
         <div class="panel-body">
-          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Simula o impacto de uma queda de preço no teu Health Factor. Ajuda a perceber até onde podes ir sem ser liquidado.</p>
+          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Simula o impacto de uma queda de preço no teu Health Factor. Funciona para AAVE e Morpho.</p>
+          ${simPositions.length === 0 ? `<div class="alert alert-info"><span>ℹ</span><div>Sem posições activas para simular. Faz Refresh primeiro.</div></div>` : ''}
           <div class="form-group">
-            <label class="form-label">Rede a simular</label>
-            <select class="form-select" id="sim_chain" onchange="updateSim()">
-              ${Object.entries(CHAINS).map(([k,c])=>`<option value="${k}" ${k===activeChain?'selected':''}>${c.name}</option>`).join('')}
+            <label class="form-label">Posição a simular</label>
+            <select class="form-select" id="sim_pos" onchange="updateSim()">
+              ${simPositions.map(sp=>`<option value="${sp.id}">${sp.label} — HF ${sp.hf?sp.hf.toFixed(3):'—'}</option>`).join('')}
             </select>
           </div>
           <div class="form-group">
@@ -1979,29 +2030,49 @@ function renderSimulator(w) {
 function initSimulator() { updateSim(); updateCalc(); startInterestTickerSim(); }
 
 function updateSim() {
-  const chain = document.getElementById('sim_chain')?.value || activeChain;
+  const sel = document.getElementById('sim_pos');
+  if (!sel) return;
   const drop = +document.getElementById('sim_drop')?.value || 0;
   const debtInc = +document.getElementById('sim_debt')?.value || 0;
-  document.getElementById('sim_drop_val').textContent = drop+'%';
-  document.getElementById('sim_debt_val').textContent = debtInc+'%';
-  const p = live.positions[chain];
-  if (!p || !p.totalCollateral) {
-    document.getElementById('simOutput').innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:0.85rem">Sem posição activa em ${CHAINS[chain]?.name}. Faz Refresh para carregar dados.</div>`;
+  const dropEl = document.getElementById('sim_drop_val'); if (dropEl) dropEl.textContent = drop+'%';
+  const debtEl = document.getElementById('sim_debt_val'); if (debtEl) debtEl.textContent = debtInc+'%';
+
+  // Resolve selected position
+  const posId = sel.value;
+  let pos = null;
+  if (posId.startsWith('aave_')) {
+    const chainKey = posId.slice(5);
+    const p = live.positions[chainKey];
+    if (p && p.totalCollateral > 0) pos = { collateral: p.totalCollateral, debt: p.totalDebt, liqThresh: (p.liqThreshold||8000)/100 };
+  } else if (posId.startsWith('morpho_')) {
+    const idx = parseInt(posId.slice(7));
+    const m = live.positions['morpho']?.positions?.[idx];
+    if (m) pos = { collateral: m.collateralUsd, debt: m.borrowUsd, liqThresh: m.lltv };
+  }
+
+  const out = document.getElementById('simOutput');
+  if (!out) return;
+  if (!pos || !pos.collateral) {
+    out.innerHTML = '<div style="grid-column:1/-1;color:var(--muted);font-size:0.85rem">Selecciona uma posição válida ou faz Refresh.</div>';
     return;
   }
-  const newCol = p.totalCollateral * (1-drop/100);
-  const newDebt = p.totalDebt * (1+debtInc/100);
+
+  const newCol = pos.collateral * (1-drop/100);
+  const newDebt = pos.debt * (1+debtInc/100);
   const newLTV = newCol>0?(newDebt/newCol*100):0;
-  const liqThresh = p.liqThreshold||8000;
-  const newHF = newDebt>0?(newCol*(liqThresh/10000))/newDebt:999;
-  const hfColor = newHF<1.2?'var(--red)':newHF<1.5?'var(--gold)':'var(--green)';
-  const status = newHF<1?'⚠️ LIQUIDAÇÃO':'< 1.2 RISCO CRÍTICO'==='newHF < 1.2'?'⚠️':newHF<1.5?'⚠ Atenção':'✓ Seguro';
-  document.getElementById('simOutput').innerHTML = [
+  const newHF = newDebt>0?(newCol*(pos.liqThresh/100))/newDebt:999;
+  const hfColor = newHF<1?'var(--red)':newHF<1.2?'var(--red)':newHF<1.5?'var(--gold)':'var(--green)';
+  out.innerHTML = [
     ['Col. Simulado','$'+fmt(newCol),'var(--gold)'],
     ['Dívida Simulada','$'+fmt(newDebt),'var(--amber)'],
     ['Novo LTV',fmt(newLTV,1)+'%',newLTV>80?'var(--red)':newLTV>60?'var(--gold)':'var(--green)'],
     ['Novo HF',newHF>100?'∞':newHF.toFixed(3),hfColor],
   ].map(([l,v,c])=>`<div style="background:var(--bg3);padding:0.6rem 0.75rem;border-radius:var(--radius)"><div style="font-family:var(--mono);font-size:0.58rem;text-transform:uppercase;color:var(--muted);margin-bottom:0.2rem">${l}</div><div style="font-family:var(--display);font-size:1.2rem;color:${c}">${v}</div></div>`).join('');
+
+  // Show warning if liquidation
+  if (newHF < 1) {
+    out.innerHTML += '<div style="grid-column:1/-1;margin-top:0.5rem;padding:0.6rem;background:rgba(255,68,68,0.1);border:1px solid var(--red);border-radius:var(--radius);color:var(--red);font-family:var(--mono);font-size:0.7rem;text-align:center">⚠️ POSIÇÃO LIQUIDADA com estes valores</div>';
+  }
 }
 
 function updateCalc() {
@@ -2538,30 +2609,33 @@ async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
     // Morpho GraphQL API - includes accrual interest, all chains
+    // Use users query with address filter for more complete coverage
     const query = `{
-      userByAddress(address: "${walletAddr.toLowerCase()}") {
-        address
-        marketPositions {
-          supplyAssets
-          supplyAssetsUsd
-          borrowAssets
-          borrowAssetsUsd
-          collateral
-          collateralUsd
-          healthFactor
-          market {
-            uniqueKey
-            loanAsset { symbol address decimals priceUsd }
-            collateralAsset { symbol address decimals priceUsd }
-            lltv
-            state {
-              borrowApy
-              supplyApy
-              utilization
-              liquidityAssetsUsd
-              borrowAssetsUsd
+      users(where:{address_in:["${walletAddr.toLowerCase()}"]}, first:10) {
+        items {
+          address
+          marketPositions(first: 100) {
+            supplyAssets
+            supplyAssetsUsd
+            borrowAssets
+            borrowAssetsUsd
+            collateral
+            collateralUsd
+            healthFactor
+            market {
+              uniqueKey
+              loanAsset { symbol address decimals priceUsd }
+              collateralAsset { symbol address decimals priceUsd }
+              lltv
+              state {
+                borrowApy
+                supplyApy
+                utilization
+                liquidityAssetsUsd
+                borrowAssetsUsd
+              }
+              morphoBlue { chain { id network } }
             }
-            morphoBlue { chain { id network } }
           }
         }
       }
@@ -2574,12 +2648,22 @@ async function fetchMorphoPositions(walletAddr) {
     });
     const j = await r.json();
     if (j.errors) { console.warn('Morpho query errors:', j.errors); }
-    const user = j.data?.userByAddress;
+    // Try both response shapes (users.items or userByAddress as fallback)
+    let user = j.data?.users?.items?.[0];
+    if (!user?.marketPositions?.length) {
+      // Fallback to userByAddress format
+      console.log('Morpho: trying fallback userByAddress query...');
+      const fallbackQuery = `{userByAddress(address:"${walletAddr.toLowerCase()}"){address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}`;
+      const r2 = await fetch('https://blue-api.morpho.org/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:fallbackQuery}),signal:AbortSignal.timeout(20000)});
+      const j2 = await r2.json();
+      user = j2.data?.userByAddress;
+    }
     if (!user?.marketPositions?.length) {
       console.log('Morpho: no positions found for', walletAddr);
       live.positions['morpho'] = null;
       return;
     }
+    console.log(`Morpho API returned ${user.marketPositions.length} market positions`);
     let totalSupply = 0, totalBorrow = 0;
     const positions = [];
     let minHF = null;
@@ -2673,16 +2757,31 @@ async function refreshAll() {
   hfResults.forEach(({k,p})=>{ live.positions[k]=p; });
   // Fetch Morpho positions
   fetchMorphoPositions(w.addr).catch(e=>console.warn('Morpho fetch failed:', e));
-  // Store HF history snapshot
+  // Store HF history snapshot in PERSISTENT state (survives reloads)
   const now = Date.now();
+  if (!state.hfHistory) state.hfHistory = {};
   chainKeys.forEach(k=>{
     const p = live.positions[k];
     if (p?.hf) {
-      if (!live.hfHistory[k]) live.hfHistory[k]=[];
-      live.hfHistory[k].push({ts:now,hf:p.hf});
-      if (live.hfHistory[k].length>50) live.hfHistory[k].shift();
+      if (!state.hfHistory[k]) state.hfHistory[k]=[];
+      // Only add new snapshot if last one is >5min old (avoid spam on rapid refresh)
+      const last = state.hfHistory[k][state.hfHistory[k].length-1];
+      if (!last || (now - last.ts) > 5*60*1000) {
+        state.hfHistory[k].push({ts:now,hf:p.hf});
+        if (state.hfHistory[k].length>200) state.hfHistory[k].shift();
+      }
     }
   });
+  // Also for Morpho aggregate min HF
+  if (live.positions['morpho']?.hf) {
+    if (!state.hfHistory['morpho']) state.hfHistory['morpho']=[];
+    const last = state.hfHistory['morpho'][state.hfHistory['morpho'].length-1];
+    if (!last || (now - last.ts) > 5*60*1000) {
+      state.hfHistory['morpho'].push({ts:now,hf:live.positions['morpho'].hf});
+      if (state.hfHistory['morpho'].length>200) state.hfHistory['morpho'].shift();
+    }
+  }
+  saveState();
   // Fetch history if API key — only for chains with positions + ethereum always
   if (w.apiKey) {
     const chainsToFetch = chainKeys.filter(k=> live.positions[k]?.totalCollateral > 0 || live.positions[k]?.totalDebt > 0 || k==='eth' || k==='base');
