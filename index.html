@@ -644,6 +644,25 @@ const MORPHO_BLUE_CONTRACTS = {
   base: '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb',
 };
 
+// Known Morpho Blue marketIds (auto-discovered + community-curated)
+// Format: { chainKey: [{id: marketId, label: 'collateral/loan'}, ...] }
+const MORPHO_KNOWN_MARKETS = {
+  base: [
+    { id: '0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836', label: 'cbBTC/USDC' },
+    { id: '0xdba352d93a64b17c71104cbddc6aef85cd432322a1446b5b65163cbbc671a556', label: 'cbBTC/USDC (2)' },
+    { id: '0x84662b4f95b85d6b082b68d32cf71bb7c4ed1ab08ae6d39c3a96d8f2a5c8aa14', label: 'WETH/USDC' },
+  ],
+  eth: [],
+};
+
+// Morpho Blue position(bytes32, address) function selector
+// keccak256("position(bytes32,address)") first 4 bytes
+const MORPHO_FN_POSITION = '0x93c52062';
+// market(bytes32) function selector  
+const MORPHO_FN_MARKET = '0x5c60e39a';
+// idToMarketParams(bytes32) function selector
+const MORPHO_FN_ID_TO_PARAMS = '0x521ce8b4';
+
 // Alchemy RPC base URLs per chain (requires API key)
 const ALCHEMY_RPCS = {
   eth:      'https://eth-mainnet.g.alchemy.com/v2/',
@@ -3218,6 +3237,139 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 // ══════════════════════════════════════════════════════════
 // MORPHO BLUE POSITIONS (via Morpho API)
 // ══════════════════════════════════════════════════════════
+// Read Morpho Blue position directly from blockchain via Alchemy RPC
+// Used for chains where the Morpho API doesn't index (e.g. Base for some wallets)
+async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
+  const w = activeWallet();
+  if (!w?.alchemyKey || !ALCHEMY_RPCS[chainKey]) return null;
+  const rpc = ALCHEMY_RPCS[chainKey] + w.alchemyKey;
+  const morphoAddr = MORPHO_BLUE_CONTRACTS[chainKey];
+  if (!morphoAddr) return null;
+
+  try {
+    // 1. Call position(marketId, user) - returns (supplyShares, borrowShares, collateral)
+    const posData = MORPHO_FN_POSITION + marketId.slice(2) + walletAddr.slice(2).toLowerCase().padStart(64, '0');
+    const posRes = await fetch(rpc, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to: morphoAddr, data: posData},'latest']}),
+      signal: AbortSignal.timeout(12000)
+    });
+    const posJ = await posRes.json();
+    if (!posJ.result || posJ.result === '0x') return null;
+    const posHex = posJ.result.slice(2).padStart(192, '0');
+    const supplyShares = BigInt('0x' + posHex.slice(0, 64));
+    const borrowShares = BigInt('0x' + posHex.slice(64, 128));
+    const collateral = BigInt('0x' + posHex.slice(128, 192));
+
+    // Skip if position is empty
+    if (supplyShares === 0n && borrowShares === 0n && collateral === 0n) return null;
+
+    // 2. Call market(marketId) - returns (totalSupplyAssets, totalSupplyShares, totalBorrowAssets, totalBorrowShares, lastUpdate, fee)
+    const mktData = MORPHO_FN_MARKET + marketId.slice(2);
+    const mktRes = await fetch(rpc, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to: morphoAddr, data: mktData},'latest']}),
+      signal: AbortSignal.timeout(12000)
+    });
+    const mktJ = await mktRes.json();
+    if (!mktJ.result) return null;
+    const mktHex = mktJ.result.slice(2).padStart(384, '0');
+    const totalSupplyAssets = BigInt('0x' + mktHex.slice(0, 64));
+    const totalSupplyShares = BigInt('0x' + mktHex.slice(64, 128));
+    const totalBorrowAssets = BigInt('0x' + mktHex.slice(128, 192));
+    const totalBorrowShares = BigInt('0x' + mktHex.slice(192, 256));
+
+    // 3. Call idToMarketParams - returns (loanToken, collateralToken, oracle, irm, lltv)
+    const paramsData = MORPHO_FN_ID_TO_PARAMS + marketId.slice(2);
+    const paramsRes = await fetch(rpc, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to: morphoAddr, data: paramsData},'latest']}),
+      signal: AbortSignal.timeout(12000)
+    });
+    const paramsJ = await paramsRes.json();
+    if (!paramsJ.result) return null;
+    const paramsHex = paramsJ.result.slice(2).padStart(320, '0');
+    const loanToken = '0x' + paramsHex.slice(24, 64);
+    const collateralToken = '0x' + paramsHex.slice(64+24, 128);
+    const lltvRaw = BigInt('0x' + paramsHex.slice(256, 320));
+    const lltv = Number(lltvRaw) / 1e18;
+
+    // 4. Get token info (symbol + decimals) via ERC20 calls
+    const getTokenInfo = async (tokenAddr) => {
+      try {
+        // symbol() - 0x95d89b41 + decimals() - 0x313ce567
+        const [symRes, decRes] = await Promise.all([
+          fetch(rpc, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:tokenAddr,data:'0x95d89b41'},'latest']}),signal:AbortSignal.timeout(8000)}),
+          fetch(rpc, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:tokenAddr,data:'0x313ce567'},'latest']}),signal:AbortSignal.timeout(8000)})
+        ]);
+        const symJ = await symRes.json();
+        const decJ = await decRes.json();
+        const decimals = decJ.result ? parseInt(decJ.result, 16) : 18;
+        // Decode symbol (string ABI: offset 32 bytes + length 32 bytes + data)
+        let symbol = '?';
+        if (symJ.result && symJ.result.length > 130) {
+          const lenHex = symJ.result.slice(66, 130);
+          const len = parseInt(lenHex, 16);
+          const dataHex = symJ.result.slice(130, 130 + len*2);
+          symbol = '';
+          for (let i = 0; i < dataHex.length; i+=2) symbol += String.fromCharCode(parseInt(dataHex.slice(i,i+2), 16));
+        }
+        return { symbol, decimals };
+      } catch(e) { return { symbol: '?', decimals: 18 }; }
+    };
+    const [loanInfo, colInfo] = await Promise.all([getTokenInfo(loanToken), getTokenInfo(collateralToken)]);
+
+    // Convert shares to assets using market totals (Morpho's conversion formula)
+    // assets = shares * totalAssets / totalShares (rounding down for borrow, up for supply)
+    const supplyAssets = totalSupplyShares > 0n ? (supplyShares * totalSupplyAssets) / totalSupplyShares : 0n;
+    const borrowAssets = totalBorrowShares > 0n ? (borrowShares * totalBorrowAssets + totalBorrowShares - 1n) / totalBorrowShares : 0n;
+
+    const supplyAmt = Number(supplyAssets) / Math.pow(10, loanInfo.decimals);
+    const borrowAmt = Number(borrowAssets) / Math.pow(10, loanInfo.decimals);
+    const colAmt = Number(collateral) / Math.pow(10, colInfo.decimals);
+
+    // Get USD prices
+    const loanPrice = getUsdPrice(loanInfo.symbol);
+    const colPrice = getUsdPrice(colInfo.symbol);
+    const supplyUsd = supplyAmt * loanPrice;
+    const borrowUsd = borrowAmt * loanPrice;
+    const collateralUsd = colAmt * colPrice;
+
+    // Health Factor
+    const hf = borrowUsd > 0 ? (collateralUsd * lltv) / borrowUsd : null;
+
+    console.log(`Morpho on-chain [${chainKey}] ${colInfo.symbol}/${loanInfo.symbol}: col=${colAmt} ($${collateralUsd.toFixed(2)}) borrow=${borrowAmt} ($${borrowUsd.toFixed(2)}) HF=${hf?.toFixed(3)||'∞'}`);
+
+    return {
+      marketKey: marketId.slice(0, 10),
+      loanSym: loanInfo.symbol,
+      loanAddr: loanToken,
+      loanDecimals: loanInfo.decimals,
+      loanPrice,
+      colSym: colInfo.symbol,
+      colAddr: collateralToken,
+      colDecimals: colInfo.decimals,
+      colPrice,
+      chain: chainKey === 'base' ? 'base' : 'ethereum',
+      lltv: lltv * 100,
+      supplyAmt,
+      supplyUsd,
+      colAmt,
+      collateralUsd,
+      borrowAmt,
+      borrowUsd,
+      hf,
+      supplyApy: 0, // Not available without IRM call
+      borrowApy: 0,
+      utilization: totalSupplyAssets > 0n ? Number(totalBorrowAssets * 10000n / totalSupplyAssets) / 10000 : 0,
+      source: 'on-chain',
+    };
+  } catch(e) {
+    console.warn(`Morpho on-chain failed for ${marketId} on ${chainKey}:`, e.message);
+    return null;
+  }
+}
+
 async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
@@ -3350,6 +3502,22 @@ async function fetchMorphoPositions(walletAddr) {
       console.log(`Morpho [${networkName}] ${pos.market?.collateralAsset?.symbol||'?'}/${pos.market?.loanAsset?.symbol||'?'}: col=$${collateralUsd.toFixed(2)} borrow=$${borrowUsd.toFixed(2)} HF=${marketHF?.toFixed(3)||'∞'}`);
     });
 
+    // ALSO fetch on-chain for known Base markets (API doesn't index Base reliably)
+    for (const chainKey of ['base', 'eth']) {
+      const knownMarkets = MORPHO_KNOWN_MARKETS[chainKey] || [];
+      for (const mkt of knownMarkets) {
+        // Skip if already in positions from API
+        if (positions.some(p => p.marketKey === mkt.id.slice(0, 10))) continue;
+        const onChainPos = await fetchMorphoOnChain(chainKey, walletAddr, mkt.id);
+        if (onChainPos) {
+          positions.push(onChainPos);
+          totalSupply += (onChainPos.supplyUsd + onChainPos.collateralUsd);
+          totalBorrow += onChainPos.borrowUsd;
+          if (onChainPos.hf !== null && (minHF === null || onChainPos.hf < minHF)) minHF = onChainPos.hf;
+        }
+      }
+    }
+
     live.positions['morpho'] = {
       hf:              minHF,
       totalCollateral: totalSupply,
@@ -3357,7 +3525,7 @@ async function fetchMorphoPositions(walletAddr) {
       available:       Math.max(0, totalSupply * 0.8 - totalBorrow),
       ltv:             totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
       positions,
-      source: 'morpho_api',
+      source: 'morpho_api+onchain',
     };
     console.log(`Morpho total: locked=$${totalSupply.toFixed(2)} debt=$${totalBorrow.toFixed(2)} minHF=${minHF?.toFixed(3)||'—'} (${positions.length} markets)`);
     // Re-render to show Morpho data
