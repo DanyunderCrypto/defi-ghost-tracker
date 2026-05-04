@@ -2858,28 +2858,35 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 
       console.log(`Alchemy ${chainKey}: ${inTransfers.length} in + ${outTransfers.length} out transfers`);
 
+      const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
       [...inTransfers, ...outTransfers].forEach(tx => {
         const sym = tx.asset || '';
         const toUser = tx.to?.toLowerCase() === userAddr;
         const fromUser = tx.from?.toLowerCase() === userAddr;
+        const fromZero = (tx.from?.toLowerCase() === ZERO_ADDR);
+        const toZero = (tx.to?.toLowerCase() === ZERO_ADDR);
         let type = null;
-        if (isAToken(sym) && toUser)   type = 'supply';
-        if (isAToken(sym) && fromUser) type = 'withdraw';
-        if (isDebtToken(sym) && toUser)   type = 'borrow';
-        if (isDebtToken(sym) && fromUser) type = 'repay';
+        // ONLY count mint/burn (real supply/borrow/withdraw/repay events)
+        // mint to user (from 0x0) = supply (aToken) or borrow (debt token)
+        // burn from user (to 0x0) = withdraw (aToken) or repay (debt token)
+        if (isAToken(sym) && toUser && fromZero)    type = 'supply';
+        if (isAToken(sym) && fromUser && toZero)    type = 'withdraw';
+        if (isDebtToken(sym) && toUser && fromZero) type = 'borrow';
+        if (isDebtToken(sym) && fromUser && toZero) type = 'repay';
         if (type) {
           const cleanAsset = sym.replace(/^a(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/i,'').replace(/^(variable|stable)Debt.*/i,'DEBT').replace(/^a/,'') || sym;
-          const price = getUsdPrice(cleanAsset);
+          const price = getUsdPrice(cleanAsset) || getUsdPrice(sym);
+          const cryptoAmt = tx.value || 0;
           events.push({
             type, chain: chainKey,
             timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
             asset: cleanAsset,
-            amountCrypto: tx.value || 0,
-            amountUSD: (tx.value || 0) * price,
+            amountCrypto: cryptoAmt,
+            amountUSD: cryptoAmt * price,
             txhash: tx.hash || '',
             rawSymbol: sym,
           });
-          console.log(`  Alchemy ✓ ${type}: ${tx.value} ${sym} → ${cleanAsset}`);
+          console.log(`  Alchemy ✓ ${type}: ${cryptoAmt} ${cleanAsset} @ $${price} = $${(cryptoAmt*price).toFixed(2)}`);
         }
       });
 
@@ -3062,11 +3069,11 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
-    // Morpho GraphQL API - includes accrual interest, all chains
-    // Query userByAddress with explicit pagination per chain
-    // Each chain (1=Ethereum, 8453=Base) requires its own scope
-    const buildQuery = (chainIds) => `{
-      userByAddress(address: "${walletAddr.toLowerCase()}", chainId: ${chainIds[0]}) {
+    // Morpho GraphQL API
+    // userByAddress returns positions across ALL chains by default
+    // Use first:1000 to bypass any default pagination limit
+    const query = `{
+      userByAddress(address: "${walletAddr.toLowerCase()}") {
         address
         marketPositions(first: 1000) {
           supplyAssets supplyAssetsUsd
@@ -3084,35 +3091,42 @@ async function fetchMorphoPositions(walletAddr) {
         }
       }
     }`;
-    // Morpho Blue is deployed on Ethereum (1) and Base (8453) primarily
-    const CHAIN_IDS = [1, 8453];
-    const allPositions = [];
-    for (const chainId of CHAIN_IDS) {
-      try {
-        const qr = await fetch('https://blue-api.morpho.org/graphql', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({query: buildQuery([chainId])}),
-          signal: AbortSignal.timeout(20000)
-        });
-        const qj = await qr.json();
-        if (qj.errors) console.warn(`Morpho chain ${chainId} errors:`, qj.errors);
-        const positions = qj.data?.userByAddress?.marketPositions || [];
-        console.log(`Morpho chain ${chainId}: ${positions.length} positions`);
-        positions.forEach(p => allPositions.push(p));
-      } catch(e) { console.warn(`Morpho chain ${chainId} failed:`, e.message); }
-    }
-    // Build single user object with all positions
-    const r = { json: async () => ({ data: { userByAddress: { address: walletAddr, marketPositions: allPositions }}})};
-    const j = { data: { userByAddress: { address: walletAddr, marketPositions: allPositions }}};
-    const user = j.data.userByAddress;
-    if (!user?.marketPositions?.length) {
-      console.log('Morpho: no positions found for', walletAddr);
-      live.positions['morpho'] = null;
-      live.morphoRaw = j; // store raw response for diagnostics
+
+    let r;
+    try {
+      r = await fetch('https://blue-api.morpho.org/graphql', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query}),
+        signal: AbortSignal.timeout(20000)
+      });
+    } catch(fe) {
+      console.warn('Morpho fetch failed:', fe.message);
       return;
     }
-    live.morphoRaw = j;
-    console.log(`Morpho API returned ${user.marketPositions.length} market positions`);
+    const j = await r.json();
+    if (j.errors) console.warn('Morpho GraphQL errors:', j.errors);
+    let user = j.data?.userByAddress;
+
+    // Fallback: try alternate users(items) format if first query returns nothing
+    if (!user?.marketPositions?.length) {
+      console.log('Morpho first-pass returned 0, trying users(items) format...');
+      try {
+        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions(first:1000){supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
+        const r2 = await fetch('https://blue-api.morpho.org/graphql', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({query: altQuery}),
+          signal: AbortSignal.timeout(20000)
+        });
+        const j2 = await r2.json();
+        if (j2.errors) console.warn('Morpho alt errors:', j2.errors);
+        const altUser = j2.data?.users?.items?.[0];
+        if (altUser?.marketPositions?.length) {
+          user = altUser;
+          console.log(`Morpho alt query: ${altUser.marketPositions.length} positions`);
+        }
+      } catch(e2) { console.warn('Morpho alt failed:', e2.message); }
+    }
+        console.log(`Morpho API returned ${user.marketPositions.length} market positions`);
     let totalSupply = 0, totalBorrow = 0;
     const positions = [];
     let minHF = null;
@@ -3193,20 +3207,31 @@ async function fetchMorphoPositions(walletAddr) {
 }
 
 function reapplyPricesToHistory() {
-  let updated = 0;
+  let updated = 0, missing = 0;
+  const missingSymbols = new Set();
   Object.values(live.history).forEach(events => {
     if (!Array.isArray(events)) return;
     events.forEach(e => {
-      if (e.amountUSD === 0 && e.amountCrypto > 0 && e.asset) {
-        const price = getUsdPrice(e.asset);
+      if ((e.amountUSD === 0 || !e.amountUSD) && e.amountCrypto > 0 && e.asset) {
+        // Try: cleaned asset, raw symbol, uppercase variants
+        const candidates = [e.asset, e.rawSymbol, e.asset?.toUpperCase()].filter(Boolean);
+        let price = 0;
+        for (const c of candidates) {
+          price = getUsdPrice(c);
+          if (price > 0) break;
+        }
         if (price > 0) {
           e.amountUSD = e.amountCrypto * price;
           updated++;
+        } else {
+          missing++;
+          missingSymbols.add(e.asset);
         }
       }
     });
   });
-  if (updated > 0) console.log(`Reapplied prices to ${updated} history events`);
+  if (updated > 0) console.log(`✓ Reapplied prices to ${updated} history events`);
+  if (missing > 0) console.log(`⚠ ${missing} events still without price. Missing symbols:`, Array.from(missingSymbols).join(', '));
 }
 
 async function refreshAll() {
