@@ -635,6 +635,13 @@ const CHAINS = {
   scroll:   { name:'Scroll',    id:534352, color:'#FFDBB1', rpcs:['https://rpc.scroll.io'],                                                                  explorer:'https://scrollscan.com',          explorerApi:'https://api.scrollscan.com/api',        aavePool:'0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
   gnosis:   { name:'Gnosis',    id:100,    color:'#04795B', rpcs:['https://gnosis.drpc.org','https://gnosis.publicnode.com','https://rpc.gnosischain.com','https://1rpc.io/gnosis'], explorer:'https://gnosisscan.io', explorerApi:'https://api.gnosisscan.io/api', aavePool:'0xb50201558B00496A145fE76f7424749556E326D8' },
   linea:    { name:'Linea',     id:59144,  color:'#61DFFF', rpcs:['https://linea.drpc.org','https://linea.publicnode.com','https://rpc.linea.build','https://linea-mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161'], explorer:'https://lineascan.build', explorerApi:'https://api.lineascan.build/api', aavePool:'0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9', },
+  katana:   { name:'Katana',    id:747474, color:'#FF5C5C', rpcs:['https://rpc.katana.network','https://katana.drpc.org'], explorer:'https://katanascan.com', explorerApi:null, aavePool:null, info:'L2 DeFi by Polygon — money legos' },
+};
+
+// Morpho Blue main contract (same address on Ethereum + Base via deterministic deploy)
+const MORPHO_BLUE_CONTRACTS = {
+  eth: '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb',
+  base: '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb',
 };
 
 // Alchemy RPC base URLs per chain (requires API key)
@@ -647,6 +654,7 @@ const ALCHEMY_RPCS = {
   scroll:   'https://scroll-mainnet.g.alchemy.com/v2/',
   gnosis:   null,
   linea:    'https://linea-mainnet.g.alchemy.com/v2/',
+  katana:   null, // Alchemy doesn't support Katana yet — uses public RPC
 };
 
 // Official AAVE V3 aToken + variableDebtToken contracts
@@ -1095,6 +1103,22 @@ function saveState() {
 // ══════════════════════════════════════════════════════════
 // HISTORY DIAGNOSTIC
 // ══════════════════════════════════════════════════════════
+function copyMorphoJSON() {
+  if (!window._lastMorphoJSON) { toast('Faz Debug Morpho primeiro','warn'); return; }
+  navigator.clipboard.writeText(window._lastMorphoJSON).then(()=>{
+    toast('✓ JSON copiado para clipboard','success');
+  }).catch(e=>{
+    // Fallback: open in a textarea
+    const ta = document.createElement('textarea');
+    ta.value = window._lastMorphoJSON;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('✓ JSON copiado','success'); }
+    catch(e2) { toast('Erro ao copiar — vê na consola','danger'); console.log(window._lastMorphoJSON); }
+    document.body.removeChild(ta);
+  });
+}
+
 async function testMorphoAPI() {
   const w = activeWallet();
   const el = document.getElementById('histDiagResult');
@@ -1151,6 +1175,10 @@ async function testMorphoAPI() {
   }
 
   lines.push('<span style="color:'+(positions.length>0?'var(--green)':'var(--gold)')+'">Posições retornadas: '+positions.length+'</span>');
+
+  // Store full raw JSON for copy button
+  window._lastMorphoJSON = JSON.stringify(j, null, 2);
+  lines.push('<button class="btn btn-outline btn-sm" style="margin-top:0.5rem" onclick="copyMorphoJSON()">📋 Copiar JSON completo</button>');
 
   try {
 
@@ -2655,7 +2683,36 @@ function renderFiscal(w) {
   const cashback = txs.reduce((s,t)=>s+(+t.cashback||0),0);
   const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365);
   const tributaveis = cols.filter(c=>daysHeld(c.acqDate)<365);
-  const allHist = Object.values(live.history).flat();
+  const allHistRaw = Object.values(live.history).flat();
+  // Toggle: only show events from positions still active
+  const showOnlyOpen = state.fiscalOnlyOpen !== false; // default ON
+
+  // Determine which (chain, asset) combos are still active
+  const activeKeys = new Set();
+  Object.entries(live.positions).forEach(([k, p]) => {
+    if (k === 'morpho') {
+      if (p?.positions?.length) {
+        p.positions.forEach(m => {
+          if ((m.collateralUsd > 0 || m.borrowUsd > 0)) {
+            activeKeys.add('morpho:'+m.colSym);
+            activeKeys.add('morpho:'+m.loanSym);
+          }
+        });
+      }
+    } else if (p?.totalCollateral > 0 || p?.totalDebt > 0) {
+      activeKeys.add(k+':*');
+    }
+  });
+
+  const isEventOpen = (e) => {
+    if (e.proto === 'morpho') return activeKeys.has('morpho:'+e.asset) || activeKeys.has('morpho:'+e.rawSymbol);
+    return activeKeys.has(e.chain+':*');
+  };
+
+  const allHist = showOnlyOpen ? allHistRaw.filter(isEventOpen) : allHistRaw;
+  // Sort by date descending
+  allHist.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+
   return `
     <div class="section-label" style="margin-bottom:1.3rem">Relatório Fiscal — Portugal 🇵🇹</div>
     <div class="alert alert-info" style="margin-bottom:1.3rem"><span>⬡</span><div>Este relatório é um ponto de partida. Não substitui aconselhamento fiscal profissional. Consulta um contabilista especializado em cripto antes de submeter o Modelo 3.</div></div>
@@ -2694,10 +2751,16 @@ function renderFiscal(w) {
     <div class="panel">
       <div class="panel-head"><span class="panel-title">Transações AAVE para Declaração</span></div>
       <div class="panel-body no-pad"><div class="table-wrap">
-        ${allHist.length?`<table><thead><tr><th>Data</th><th>Rede</th><th>Tipo</th><th>Ativo</th><th>USD</th><th>Categoria</th><th>TX</th></tr></thead><tbody>
-          ${allHist.slice(0,30).map(e=>`<tr>
+        <div style="padding:0.75rem 1rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+          <span style="font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em;color:var(--muted);text-transform:uppercase">Filtro:</span>
+          <button class="btn btn-sm ${showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(true)">📂 Apenas posições em aberto (${allHist.length})</button>
+          <button class="btn btn-sm ${!showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(false)">📚 Todas (${allHistRaw.length})</button>
+        </div>
+        ${allHist.length?`<table><thead><tr><th>Data</th><th>Rede</th><th>Protocolo</th><th>Tipo</th><th>Ativo</th><th>USD</th><th>Categoria</th><th>TX</th></tr></thead><tbody>
+          ${allHist.slice(0,50).map(e=>`<tr>
             <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleDateString('pt-PT'):'—'}</td>
             <td>${CHAINS[e.chain]?.name||'—'}</td>
+            <td><span style="color:${e.proto==='morpho'?'#1C55FE':'#B6509E'};font-size:0.75rem">${e.proto==='morpho'?'Morpho':'AAVE V3'}</span></td>
             <td style="color:${e.type==='supply'?'var(--green)':e.type==='borrow'?'var(--amber)':'var(--blue)'}font-weight:600">${(e.type||'—').toUpperCase()}</td>
             <td style="font-weight:600">${e.asset||'—'}</td>
             <td class="mono gold">$${fmt(e.amountUSD||0)}</td>
@@ -2890,6 +2953,7 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
           const cryptoAmt = tx.value || 0;
           events.push({
             type, chain: chainKey,
+            proto: 'aave',
             timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
             asset: cleanAsset,
             amountCrypto: cryptoAmt,
@@ -2903,7 +2967,83 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 
       if (events.length > 0) {
         console.log(`Alchemy ${chainKey}: found ${events.length} AAVE events`);
-        return events.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,50);
+      }
+
+      // ALSO fetch Morpho Blue transactions (if this chain has Morpho)
+      if (MORPHO_BLUE_CONTRACTS[chainKey]) {
+        try {
+          const morphoContract = MORPHO_BLUE_CONTRACTS[chainKey];
+          // Morpho events come from the contract. User is sender for supply/repay, recipient for borrow/withdraw
+          // We capture transfers TO/FROM the user where the OTHER party is the Morpho Blue contract
+          const morphoFilter = { contractAddresses: [morphoContract] };
+          const mr1 = await fetch(alchemyRpc, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
+              fromBlock:'0x0', toBlock:'latest',
+              fromAddress: walletAddr,
+              order: 'desc',
+              category:['external','erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x3e8'
+            }]}),
+            signal: AbortSignal.timeout(20000)
+          });
+          const mj1 = await mr1.json();
+          const userToMorpho = (mj1.result?.transfers || []).filter(tx => tx.to?.toLowerCase() === morphoContract.toLowerCase());
+
+          const mr2 = await fetch(alchemyRpc, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
+              fromBlock:'0x0', toBlock:'latest',
+              toAddress: walletAddr,
+              order: 'desc',
+              category:['external','erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x3e8'
+            }]}),
+            signal: AbortSignal.timeout(20000)
+          });
+          const mj2 = await mr2.json();
+          const morphoToUser = (mj2.result?.transfers || []).filter(tx => tx.from?.toLowerCase() === morphoContract.toLowerCase());
+
+          console.log(`Morpho ${chainKey}: user→morpho ${userToMorpho.length}, morpho→user ${morphoToUser.length}`);
+
+          // user→morpho: supply collateral, supply, repay
+          userToMorpho.forEach(tx => {
+            const sym = tx.asset || 'ETH';
+            const cryptoAmt = tx.value || 0;
+            const price = getUsdPrice(sym);
+            // Type: assume "supply" for ERC20 to Morpho. Could be borrow/repay too. Without log decoding, simplify.
+            events.push({
+              type: 'morpho_supply',
+              chain: chainKey,
+              proto: 'morpho',
+              timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
+              asset: sym,
+              amountCrypto: cryptoAmt,
+              amountUSD: cryptoAmt * price,
+              txhash: tx.hash || '',
+              rawSymbol: sym,
+            });
+          });
+          // morpho→user: borrow, withdraw
+          morphoToUser.forEach(tx => {
+            const sym = tx.asset || 'ETH';
+            const cryptoAmt = tx.value || 0;
+            const price = getUsdPrice(sym);
+            events.push({
+              type: 'morpho_borrow',
+              chain: chainKey,
+              proto: 'morpho',
+              timestamp: tx.metadata?.blockTimestamp ? Math.floor(new Date(tx.metadata.blockTimestamp).getTime()/1000) : 0,
+              asset: sym,
+              amountCrypto: cryptoAmt,
+              amountUSD: cryptoAmt * price,
+              txhash: tx.hash || '',
+              rawSymbol: sym,
+            });
+          });
+        } catch(me) { console.warn('Morpho history failed:', chainKey, me.message); }
+      }
+
+      if (events.length > 0) {
+        return events.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,100);
       }
     } catch(e) { console.warn('Alchemy history failed:', chainKey, e.message); }
   }
@@ -3816,6 +3956,13 @@ function exportFiscalCSV() {
   a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
   a.download=`ghost-fiscal-${new Date().toISOString().split('T')[0]}.csv`;
   a.click();
+}
+
+function toggleFiscalFilter(onlyOpen) {
+  if (!state.hasOwnProperty('fiscalOnlyOpen')) state.fiscalOnlyOpen = true;
+  state.fiscalOnlyOpen = onlyOpen;
+  saveState();
+  render();
 }
 
 function exportJSON() {
