@@ -1101,24 +1101,47 @@ async function testMorphoAPI() {
   if (!el) return;
   if (!w?.addr) { el.innerHTML = '<span style="color:var(--red)">Sem wallet</span>'; return; }
 
-  el.innerHTML = '<span style="color:var(--muted)">A consultar Morpho API...</span>';
+  el.innerHTML = '<span style="color:var(--muted)">A consultar Morpho API (Ethereum + Base)...</span>';
   const lines = ['<span style="color:var(--muted)">URL: https://blue-api.morpho.org/graphql</span>'];
   lines.push('<span style="color:var(--muted)">Wallet: '+w.addr+'</span>');
+  lines.push('<span style="color:var(--muted)">Query: per-chain (chainId=1 + chainId=8453)</span>');
 
-  const query = `{userByAddress(address:"${w.addr.toLowerCase()}"){address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
+  // Query each chain separately
+  const CHAIN_IDS = [{id: 1, name: 'Ethereum'}, {id: 8453, name: 'Base'}];
+  const allPositions = [];
+  let allErrors = [];
+
+  for (const c of CHAIN_IDS) {
+    const query = `{userByAddress(address:"${w.addr.toLowerCase()}", chainId: ${c.id}){address marketPositions(first:100){supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
+    try {
+      const r = await fetch('https://blue-api.morpho.org/graphql', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query}), signal: AbortSignal.timeout(20000)
+      });
+      const j = await r.json();
+      const positions = j.data?.userByAddress?.marketPositions || [];
+      lines.push('<span style="color:'+(positions.length>0?'var(--green)':'var(--muted)')+'">[chainId '+c.id+' '+c.name+']: '+positions.length+' posições</span>');
+      if (j.errors) {
+        j.errors.forEach(e => { allErrors.push('chain '+c.id+': '+e.message); });
+      }
+      positions.forEach(p => allPositions.push(p));
+    } catch(e) {
+      lines.push('<span style="color:var(--red)">[chain '+c.id+']: '+e.message+'</span>');
+    }
+  }
+
+  if (allErrors.length > 0) {
+    lines.push('<span style="color:var(--red)">Erros GraphQL:</span>');
+    allErrors.forEach(err => lines.push('<span style="color:var(--red)">  '+err+'</span>'));
+  }
+
+  lines.push('<span style="color:'+(allPositions.length>0?'var(--green)':'var(--gold)')+'">Total agregado: '+allPositions.length+' posições</span>');
+
+  // Iterate positions for display
+  const positions = allPositions;
+  const j = { data: { userByAddress: { marketPositions: allPositions }}};
 
   try {
-    const r = await fetch('https://blue-api.morpho.org/graphql', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({query}), signal: AbortSignal.timeout(20000)
-    });
-    const j = await r.json();
-    if (j.errors) {
-      lines.push('<span style="color:var(--red)">Erros GraphQL:</span>');
-      j.errors.forEach(e => lines.push('<span style="color:var(--red)">  '+e.message+'</span>'));
-    }
-    const positions = j.data?.userByAddress?.marketPositions || [];
-    lines.push('<span style="color:'+(positions.length>0?'var(--green)':'var(--gold)')+'">Posições retornadas: '+positions.length+'</span>');
 
     positions.forEach((pos, i) => {
       const col = pos.collateralUsd || 0;
@@ -3040,44 +3063,48 @@ async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
     // Morpho GraphQL API - includes accrual interest, all chains
-    // Use userByAddress (the canonical Morpho API query for user positions)
-    const query = `{
-      userByAddress(address: "${walletAddr.toLowerCase()}") {
+    // Query userByAddress with explicit pagination per chain
+    // Each chain (1=Ethereum, 8453=Base) requires its own scope
+    const buildQuery = (chainIds) => `{
+      userByAddress(address: "${walletAddr.toLowerCase()}", chainId: ${chainIds[0]}) {
         address
-        marketPositions {
-          supplyAssets
-          supplyAssetsUsd
-          borrowAssets
-          borrowAssetsUsd
-          collateral
-          collateralUsd
+        marketPositions(first: 1000) {
+          supplyAssets supplyAssetsUsd
+          borrowAssets borrowAssetsUsd
+          collateral collateralUsd
           healthFactor
           market {
             uniqueKey
             loanAsset { symbol address decimals priceUsd }
             collateralAsset { symbol address decimals priceUsd }
             lltv
-            state {
-              borrowApy
-              supplyApy
-              utilization
-              liquidityAssetsUsd
-              borrowAssetsUsd
-            }
+            state { borrowApy supplyApy utilization }
             morphoBlue { chain { id network } }
           }
         }
       }
     }`;
-    const r = await fetch('https://blue-api.morpho.org/graphql', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query}),
-      signal: AbortSignal.timeout(20000)
-    });
-    const j = await r.json();
-    if (j.errors) { console.warn('Morpho GraphQL errors:', j.errors); }
-    const user = j.data?.userByAddress;
+    // Morpho Blue is deployed on Ethereum (1) and Base (8453) primarily
+    const CHAIN_IDS = [1, 8453];
+    const allPositions = [];
+    for (const chainId of CHAIN_IDS) {
+      try {
+        const qr = await fetch('https://blue-api.morpho.org/graphql', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({query: buildQuery([chainId])}),
+          signal: AbortSignal.timeout(20000)
+        });
+        const qj = await qr.json();
+        if (qj.errors) console.warn(`Morpho chain ${chainId} errors:`, qj.errors);
+        const positions = qj.data?.userByAddress?.marketPositions || [];
+        console.log(`Morpho chain ${chainId}: ${positions.length} positions`);
+        positions.forEach(p => allPositions.push(p));
+      } catch(e) { console.warn(`Morpho chain ${chainId} failed:`, e.message); }
+    }
+    // Build single user object with all positions
+    const r = { json: async () => ({ data: { userByAddress: { address: walletAddr, marketPositions: allPositions }}})};
+    const j = { data: { userByAddress: { address: walletAddr, marketPositions: allPositions }}};
+    const user = j.data.userByAddress;
     if (!user?.marketPositions?.length) {
       console.log('Morpho: no positions found for', walletAddr);
       live.positions['morpho'] = null;
@@ -3165,20 +3192,37 @@ async function fetchMorphoPositions(walletAddr) {
   }
 }
 
+function reapplyPricesToHistory() {
+  let updated = 0;
+  Object.values(live.history).forEach(events => {
+    if (!Array.isArray(events)) return;
+    events.forEach(e => {
+      if (e.amountUSD === 0 && e.amountCrypto > 0 && e.asset) {
+        const price = getUsdPrice(e.asset);
+        if (price > 0) {
+          e.amountUSD = e.amountCrypto * price;
+          updated++;
+        }
+      }
+    });
+  });
+  if (updated > 0) console.log(`Reapplied prices to ${updated} history events`);
+}
+
 async function refreshAll() {
   const w = activeWallet();
   if (!w) return;
   const btn = document.getElementById('refreshBtn');
   if (btn) { btn.textContent='...'; btn.disabled=true; }
   const chainKeys = Object.keys(CHAINS);
-  // Fetch prices + HF in parallel
-  const [,hfResults] = await Promise.all([
-    fetchEurRate(),
-    Promise.all(chainKeys.map(k=>fetchHF(k,w.addr).then(p=>({k,p})))),
-  ]);
+  // STEP 1: Fetch prices FIRST (so subsequent calls have USD context)
+  await fetchEurRate();
+  console.log('Step 1 done: prices loaded ('+Object.keys(live.prices).length+' tokens)');
+  // STEP 2: HF positions in parallel
+  const hfResults = await Promise.all(chainKeys.map(k=>fetchHF(k,w.addr).then(p=>({k,p}))));
   hfResults.forEach(({k,p})=>{ live.positions[k]=p; });
-  // Fetch Morpho positions
-  fetchMorphoPositions(w.addr).catch(e=>console.warn('Morpho fetch failed:', e));
+  // STEP 3: Fetch Morpho positions
+  await fetchMorphoPositions(w.addr).catch(e=>console.warn('Morpho fetch failed:', e));
   // Store HF history snapshot in PERSISTENT state (survives reloads)
   const now = Date.now();
   if (!state.hfHistory) state.hfHistory = {};
@@ -3204,12 +3248,15 @@ async function refreshAll() {
     }
   }
   saveState();
-  // Fetch history if API key — only for chains with positions + ethereum always
-  if (w.apiKey) {
+  // STEP 4: Fetch history (uses prices loaded in step 1)
+  // Now that prices are ready, fetch history for active chains
+  if (w.apiKey || w.alchemyKey) {
     const chainsToFetch = chainKeys.filter(k=> live.positions[k]?.totalCollateral > 0 || live.positions[k]?.totalDebt > 0 || k==='eth' || k==='base');
-    if (chainsToFetch.length === 0) chainsToFetch.push('eth','base'); // fallback
+    if (chainsToFetch.length === 0) chainsToFetch.push('eth','base');
     const histResults = await Promise.allSettled(chainsToFetch.map(k=>fetchHistory(k,w.addr,w.apiKey).then(h=>({k,h}))));
     histResults.forEach(r=>{ if(r.status==='fulfilled'&&r.value.h.length) live.history[r.value.k]=r.value.h; });
+    // Re-apply prices to all events (in case prices loaded after the events)
+    reapplyPricesToHistory();
   } else {
     console.log('No API key — skipping history fetch. Add key in Config tab.');
   }
