@@ -405,12 +405,6 @@ td.muted  { color:var(--muted); }
 <canvas id="ghostCanvas"></canvas>
 <div class="grid-overlay"></div>
 
-<!-- FLOATING HF WIDGET -->
-<div class="hf-widget hidden" id="hfWidget">
-  <div class="hf-widget-num sv-green" id="hfWidgetNum">—</div>
-  <div class="hf-widget-label">HF</div>
-</div>
-
 <!-- TOAST CONTAINER -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -427,7 +421,7 @@ td.muted  { color:var(--muted); }
   </div>
   <div class="nav-tabs" id="navTabs">
     <button class="nav-tab active" onclick="showTab('dashboard')">Dashboard</button>
-    <button class="nav-tab" onclick="showTab('protocols')">Protocolos</button>
+    <button class="nav-tab" onclick="showTab('protocols')">Posições</button>
     <button class="nav-tab" onclick="showTab('cards')">Cartões</button>
     <button class="nav-tab" onclick="showTab('strategy')">365 Dias</button>
     <button class="nav-tab" onclick="showTab('simulator')">Simulador</button>
@@ -812,45 +806,92 @@ async function testAlchemyAPI(chainKey) {
   const w = activeWallet();
   const el = document.getElementById('histDiagResult');
   if (!el) return;
-  if (!w?.alchemyKey) { el.innerHTML = '<span style="color:var(--gold)">⚠ Sem Alchemy API Key. Adiciona em Config → Guardar Keys.</span>'; return; }
-  if (!ALCHEMY_RPCS[chainKey]) { el.innerHTML = `<span style="color:var(--muted)">Alchemy não suporta ${chainKey}</span>`; return; }
+  if (!w?.alchemyKey) { el.innerHTML = '<span style="color:var(--gold)">⚠ Sem Alchemy API Key. Adiciona em Config.</span>'; return; }
+  if (!ALCHEMY_RPCS[chainKey]) { el.innerHTML = '<span style="color:var(--muted)">Alchemy não suporta '+chainKey+'</span>'; return; }
 
-  el.innerHTML = `<span style="color:var(--muted)">A testar Alchemy ${chainKey}...</span>`;
+  el.innerHTML = '<span style="color:var(--muted)">A testar Alchemy '+chainKey+'...</span>';
   const rpc = ALCHEMY_RPCS[chainKey] + w.alchemyKey;
-  const lines = [`<span style="color:var(--muted)">RPC: ${rpc.replace(w.alchemyKey,'***KEY***')}</span>`];
+  const lines = ['<span style="color:var(--muted)">RPC: '+rpc.replace(w.alchemyKey,'***KEY***')+'</span>'];
+
+  // Build contract filter
+  const supplyContracts = AAVE_ATOKEN_CONTRACTS[chainKey+'_supply'] || [];
+  const debtContracts = AAVE_ATOKEN_CONTRACTS[chainKey+'_debt'] || [];
+  const allContracts = supplyContracts.concat(debtContracts);
+  lines.push('<span style="color:var(--muted)">Contratos AAVE filtrados: '+allContracts.length+'</span>');
+
+  const params = {
+    fromBlock: '0x0', toBlock: 'latest',
+    toAddress: w.addr,
+    order: 'desc',
+    category: ['erc20'],
+    withMetadata: true,
+    excludeZeroValue: true,
+    maxCount: '0x64'
+  };
+  if (allContracts.length > 0) params.contractAddresses = allContracts;
+
   try {
     const res = await fetch(rpc, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({jsonrpc:'2.0',id:1,method:'alchemy_getAssetTransfers',params:[{
-        fromBlock:'0x0', toBlock:'latest', toAddress: w.addr,
-        order: 'desc',
-        contractAddresses: (AAVE_ATOKEN_CONTRACTS[chainKey+'_supply']||[]).concat(AAVE_ATOKEN_CONTRACTS[chainKey+'_debt']||[]),
-        category:['erc20'], withMetadata:true, excludeZeroValue:true, maxCount:'0x64'
-      }]}),
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0', id:1, method:'alchemy_getAssetTransfers', params:[params]}),
       signal: AbortSignal.timeout(20000)
     });
     const j = await res.json();
-    if (j.error) { lines.push(`<span style="color:var(--red)">❌ Erro: ${j.error.message}</span>`); el.innerHTML=lines.join('<br>'); return; }
+    if (j.error) {
+      lines.push('<span style="color:var(--red)">❌ Erro Alchemy: '+(j.error.message||JSON.stringify(j.error))+'</span>');
+      el.innerHTML = lines.join('<br>');
+      return;
+    }
     const txs = j.result?.transfers || [];
-    lines.push(`<span style="color:var(--green)">✓ Alchemy funcionou! ${txs.length} transferências encontradas</span>`);
-    const syms = [...new Set(txs.map(t=>t.asset).filter(Boolean))];
-    lines.push(`<span style="color:var(--muted)">Símbolos: ${syms.join(', ')||'nenhum'}</span>`);
-    const SKIP = ['AAVE','ARB','APES','AVAX','ALGO','ADA','ATOM','APT'];
-    const atokens = txs.filter(t=>/^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset));
-    const aLabel = atokens.length > 0 ? atokens.map(t=>t.asset).join(', ') : 'nenhum';
-    const aColor = atokens.length > 0 ? 'var(--green)' : 'var(--gold)';
-    lines.push('<span style="color:'+aColor+'">aTokens AAVE: '+atokens.length+' ('+aLabel+')</span>');
-    lines.push('<span style="color:var(--muted)">-- 10 transferencias mais recentes --</span>');
-    txs.slice(0,10).forEach(function(t){
-      const isA = /^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset);
-      const date = (t.metadata && t.metadata.blockTimestamp) ? t.metadata.blockTimestamp.slice(0,10) : '?';
-      const col = isA ? 'var(--green)' : 'var(--white)';
-      lines.push('<span style="color:'+col+'">'+date+' | '+(t.asset||'?')+' | '+Number(t.value||0).toFixed(4)+' | tx:'+((t.hash||'').slice(0,12))+'...</span>');
-    });
+    lines.push('<span style="color:var(--green)">✓ Alchemy IN: '+txs.length+' transferências encontradas</span>');
+
+    // Also fetch FROM wallet
+    const params2 = Object.assign({}, params);
+    delete params2.toAddress;
+    params2.fromAddress = w.addr;
+    let outTxs = [];
+    try {
+      const r2 = await fetch(rpc, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({jsonrpc:'2.0', id:1, method:'alchemy_getAssetTransfers', params:[params2]}),
+        signal: AbortSignal.timeout(15000)
+      });
+      const j2 = await r2.json();
+      outTxs = j2.result?.transfers || [];
+      lines.push('<span style="color:var(--green)">✓ Alchemy OUT: '+outTxs.length+' transferências encontradas</span>');
+    } catch(e2) {
+      lines.push('<span style="color:var(--gold)">⚠ Saída falhou: '+(e2.message||'erro')+'</span>');
+    }
+
+    const allTx = txs.concat(outTxs);
+    if (allTx.length === 0) {
+      lines.push('<span style="color:var(--gold)">Nenhuma transferência AAVE encontrada nesta chain.</span>');
+      lines.push('<span style="color:var(--muted)">Possíveis causas:</span>');
+      lines.push('<span style="color:var(--muted)">  • Não tens posição AAVE V3 nesta rede</span>');
+      lines.push('<span style="color:var(--muted)">  • A wallet activa não é a que fez o supply</span>');
+    } else {
+      const SKIP = ['AAVE','ARB','APES','AVAX','ALGO','ADA'];
+      const atokens = allTx.filter(t => /^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset));
+      const aLabel = atokens.length > 0 ? atokens.map(t=>t.asset).join(', ') : 'nenhum';
+      const aColor = atokens.length > 0 ? 'var(--green)' : 'var(--gold)';
+      lines.push('<span style="color:'+aColor+'">aTokens AAVE: '+atokens.length+' ('+aLabel+')</span>');
+      lines.push('<span style="color:var(--muted)">── 10 transferências mais recentes ──</span>');
+      allTx.slice(0,10).forEach(t => {
+        const isA = /^a[A-Z]/.test(t.asset||'') && !SKIP.includes(t.asset);
+        const date = (t.metadata && t.metadata.blockTimestamp) ? t.metadata.blockTimestamp.slice(0,10) : '?';
+        const col = isA ? 'var(--green)' : 'var(--white)';
+        const dir = t.to?.toLowerCase() === w.addr.toLowerCase() ? '←' : '→';
+        lines.push('<span style="color:'+col+'">'+date+' '+dir+' '+(t.asset||'?')+' | '+Number(t.value||0).toFixed(4)+' | tx:'+(t.hash||'').slice(0,10)+'...</span>');
+      });
+    }
   } catch(e) {
     const msg = (e && e.message) ? e.message : String(e);
     lines.push('<span style="color:var(--red)">Erro: '+msg+'</span>');
-    if (msg.includes('fetch')) lines.push('<span style="color:var(--gold)">Possivel bloqueio CORS ou Alchemy key invalida</span>');
+    if (msg.includes('fetch') || msg.toLowerCase().includes('cors')) {
+      lines.push('<span style="color:var(--gold)">⚠ Possível bloqueio CORS ou Alchemy key inválida</span>');
+    }
   }
   el.innerHTML = lines.join('<br>');
 }
@@ -956,7 +997,6 @@ async function runConnectionTest() {
 // ══════════════════════════════════════════════════════════
 function boot() {
   startCanvas();
-  startWidget();
   fetchEurRate();
   render();
   const w = activeWallet();
@@ -1031,7 +1071,6 @@ function render() {
 
 function afterRender() {
   updateHFPill();
-  updateWidget();
   buildWalletDD();
   if (currentTab === 'simulator') initSimulator();
   if (currentTab === 'dashboard') startInterestTicker();
@@ -1076,12 +1115,32 @@ function saveFirstWallet() {
 // DASHBOARD
 // ══════════════════════════════════════════════════════════
 function renderDashboard(w) {
-  const allPos = Object.entries(live.positions);
-  const activePos = allPos.filter(([,p])=>p&&(p.totalCollateral>0||p.totalDebt>0));
+  // Build unified protocol list - AAVE per chain + Morpho
+  const protoEntries = [];
+  Object.entries(live.positions).forEach(([key, p]) => {
+    if (key === 'morpho') {
+      if (p?.totalCollateral > 0 || p?.totalDebt > 0) {
+        protoEntries.push({ proto:'morpho', key:'morpho', chain:null, data:p });
+      }
+    } else if (p?.totalCollateral > 0 || p?.totalDebt > 0) {
+      protoEntries.push({ proto:'aave', key:'aave_'+key, chain:key, data:p });
+    }
+  });
+
   let minHF = null;
-  allPos.forEach(([,p])=>{ if(p?.hf!==null&&p?.hf!==undefined){ if(minHF===null||p.hf<minHF) minHF=p.hf; }});
-  const totalCol = activePos.reduce((s,[,p])=>s+(p.totalCollateral||0),0) + (live.positions['morpho']?.totalCollateral||0);
-  const totalDebt = activePos.reduce((s,[,p])=>s+(p.totalDebt||0),0) + (live.positions['morpho']?.totalDebt||0);
+  let totalCol = 0, totalDebt = 0;
+  protoEntries.forEach(e => {
+    totalCol += e.data.totalCollateral || 0;
+    totalDebt += e.data.totalDebt || 0;
+    // For Morpho, check per-market HF
+    if (e.proto === 'morpho' && e.data.positions) {
+      e.data.positions.forEach(pos => {
+        if (pos.hf && (minHF===null || pos.hf<minHF)) minHF = pos.hf;
+      });
+    } else if (e.data.hf!==null && e.data.hf!==undefined) {
+      if (minHF===null || e.data.hf<minHF) minHF = e.data.hf;
+    }
+  });
   const gLTV = totalCol>0?(totalDebt/totalCol*100):0;
   const cols = state.collateral.filter(c=>c.walletId===w.id);
   const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365).length;
@@ -1101,27 +1160,21 @@ function renderDashboard(w) {
     ${alertHTML}
     <div class="stats-grid" style="margin:1rem 0">
       <div class="stat"><div class="stat-label">Health Factor Min.</div><div class="stat-value" style="color:${hfColor}">${minHF!==null?minHF.toFixed(3):'—'}</div><div class="stat-sub">pior entre redes</div></div>
-      <div class="stat"><div class="stat-label">Colateral Total</div><div class="stat-value sv-gold">$${fmt(totalCol)}</div><div class="stat-sub">≈ €${fmt(totalCol*live.eurRate)} · ${activePos.length} redes</div></div>
+      <div class="stat"><div class="stat-label">Colateral Total</div><div class="stat-value sv-gold">$${fmt(totalCol)}</div><div class="stat-sub">≈ €${fmt(totalCol*live.eurRate)} · ${protoEntries.length} posições</div></div>
       <div class="stat"><div class="stat-label">Dívida Total</div><div class="stat-value sv-amber">$${fmt(totalDebt)}</div><div class="stat-sub">LTV ${fmt(gLTV,1)}%</div></div>
       <div class="stat"><div class="stat-label">Juros a Correr</div><div class="stat-value sv-red" id="interestTicker">$${fmt(totalInterest)}</div><div class="stat-sub">acumulado estimado</div></div>
       <div class="stat"><div class="stat-label">Gasto Cartões</div><div class="stat-value sv-blue">€${fmt(totalCardSpend)}</div><div class="stat-sub">${state.txs.filter(t=>t.walletId===w.id).length} transações</div></div>
       <div class="stat"><div class="stat-label">Lotes Isentos</div><div class="stat-value sv-green">${isentos}<span style="font-size:1rem;color:var(--muted)">/${cols.length}</span></div><div class="stat-sub">estratégia 365d PT</div></div>
     </div>
 
-    <div class="two-col">
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title">⬡ Posições por Rede — AAVE V3</span>
-          <div style="display:flex;gap:0.5rem">
-            <button class="btn btn-outline btn-sm" onclick="openModal('modalGhostCard');buildGhostCard()">👻 Ghost Card</button>
-          </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">⬡ Posições Activas — Todos os Protocolos</span>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-outline btn-sm" onclick="openModal('modalGhostCard');buildGhostCard()">👻 Ghost Card</button>
         </div>
-        <div class="panel-body no-pad"><div class="table-wrap">${renderPositionsTable()}</div></div>
       </div>
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">⬡ Health Factor — ${CHAINS[activeChain]?.name}</span></div>
-        <div class="panel-body">${renderHFRing(activeChain)}</div>
-      </div>
+      <div class="panel-body no-pad">${renderUnifiedPositions()}</div>
     </div>
 
     <div class="two-col">
@@ -1142,6 +1195,196 @@ function renderDashboard(w) {
 
     ${live.lastRefresh?`<div style="text-align:right;font-family:var(--mono);font-size:0.6rem;color:var(--muted)">Refresh: ${live.lastRefresh} · USD/EUR: ${live.eurRate}</div>`:''}
   `;
+}
+
+// State for expanded rows
+window._expandedRows = window._expandedRows || new Set();
+function toggleRow(id) {
+  if (window._expandedRows.has(id)) window._expandedRows.delete(id);
+  else window._expandedRows.add(id);
+  render();
+}
+
+function renderUnifiedPositions() {
+  // Build all position rows
+  const rows = [];
+  Object.entries(live.positions).forEach(([key, p]) => {
+    if (key === 'morpho') {
+      if (p && (p.totalCollateral > 0 || p.totalDebt > 0)) {
+        rows.push({
+          id: 'morpho',
+          proto: 'Morpho Blue',
+          protoKey: 'morpho',
+          color: '#1C55FE',
+          icon: 'MO',
+          chain: '— Multi-mercado',
+          chainColor: '#888',
+          collateral: p.totalCollateral,
+          debt: p.totalDebt,
+          hf: p.hf,
+          ltv: p.ltv,
+          available: p.available,
+          markets: p.positions || [],
+          isMorpho: true,
+        });
+      }
+    } else if (p && (p.totalCollateral > 0 || p.totalDebt > 0)) {
+      const chain = CHAINS[key];
+      rows.push({
+        id: 'aave_' + key,
+        proto: 'AAVE V3',
+        protoKey: 'aave',
+        color: '#B6509E',
+        icon: 'AA',
+        chain: chain?.name || key,
+        chainColor: chain?.color || '#888',
+        collateral: p.totalCollateral,
+        debt: p.totalDebt,
+        hf: p.hf,
+        ltv: p.ltv,
+        available: p.available,
+        chainKey: key,
+        liqThreshold: p.liqThreshold,
+        isMorpho: false,
+      });
+    }
+  });
+
+  if (rows.length === 0) {
+    return '<div class="empty"><span class="empty-icon">📡</span><p>Sem posições activas. Clica ↻ para actualizar.</p></div>';
+  }
+
+  // Compute totals
+  const totalCol = rows.reduce((s,r)=>s+r.collateral, 0);
+  const totalDebt = rows.reduce((s,r)=>s+r.debt, 0);
+  let minHF = null;
+  rows.forEach(r => {
+    if (r.isMorpho && r.markets) {
+      r.markets.forEach(m => { if (m.hf && (minHF===null||m.hf<minHF)) minHF=m.hf; });
+    } else if (r.hf && (minHF===null||r.hf<minHF)) minHF = r.hf;
+  });
+
+  // Build table
+  const tableRows = rows.map(r => {
+    const expanded = window._expandedRows.has(r.id);
+    const hfColor = !r.hf ? 'var(--muted)' : r.hf<1.2 ? 'var(--red)' : r.hf<1.5 ? 'var(--gold)' : 'var(--green)';
+    const ltvColor = r.ltv>70 ? 'var(--red)' : r.ltv>50 ? 'var(--gold)' : 'var(--green)';
+    const ltvBar = r.ltv>70 ? 'prog-red' : r.ltv>50 ? 'prog-amber' : 'prog-green';
+    const hfDisplay = r.isMorpho
+      ? (r.markets.length>1 ? `<span style="color:${hfColor};font-weight:700">min ${r.hf?r.hf.toFixed(3):'—'}</span>` : `<span style="color:${hfColor};font-weight:700">${r.hf?r.hf.toFixed(3):'—'}</span>`)
+      : `<span style="color:${hfColor};font-weight:700">${r.hf?r.hf.toFixed(3):'—'}</span>`;
+
+    let row = `<tr onclick="toggleRow('${r.id}')" style="cursor:pointer">
+      <td style="width:28px;text-align:center"><span style="color:var(--gold);font-family:var(--mono);font-size:0.8rem">${expanded?'▼':'▶'}</span></td>
+      <td><div style="display:flex;align-items:center;gap:0.5rem">
+        <div style="width:24px;height:24px;border-radius:50%;background:${r.color};display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.55rem;color:#fff;font-weight:700">${r.icon}</div>
+        <strong style="color:${r.color}">${r.proto}</strong>
+      </div></td>
+      <td><div style="display:flex;align-items:center;gap:0.4rem"><span class="chain-dot" style="background:${r.chainColor};box-shadow:0 0 6px ${r.chainColor}"></span><span style="color:${r.chainColor};font-size:0.85rem">${r.chain}</span></div></td>
+      <td class="mono gold">$${fmt(r.collateral)}</td>
+      <td class="mono amber">$${fmt(r.debt)}</td>
+      <td class="mono">${hfDisplay}</td>
+      <td style="min-width:90px"><div class="prog-wrap"><div class="prog-bar ${ltvBar}" style="width:${Math.min(100,r.ltv)}%"></div></div><span style="font-family:var(--mono);font-size:0.62rem;color:${ltvColor}">${fmt(r.ltv,1)}%</span></td>
+      <td class="mono blue">$${fmt(r.available||0)}</td>
+    </tr>`;
+
+    // Expanded detail row
+    if (expanded) {
+      if (r.isMorpho && r.markets.length > 0) {
+        row += `<tr><td colspan="8" style="padding:0;background:var(--bg2);border-top:1px solid var(--gold)">
+          <div style="padding:1.2rem">
+            <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--gold);margin-bottom:0.8rem">⬡ ${r.markets.length} Mercado${r.markets.length>1?'s':''} Morpho</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:1rem">
+              ${r.markets.map(m=>renderMorphoMarketCard(m)).join('')}
+            </div>
+          </div>
+        </td></tr>`;
+      } else if (!r.isMorpho) {
+        row += `<tr><td colspan="8" style="padding:0;background:var(--bg2);border-top:1px solid var(--gold)">
+          <div style="padding:1.2rem">
+            <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--gold);margin-bottom:0.8rem">⬡ AAVE V3 ${r.chain} — Detalhe</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem">
+              ${[
+                ['Health Factor', r.hf?r.hf.toFixed(3):'—', hfColor],
+                ['Liquidation Threshold', r.liqThreshold?(r.liqThreshold/100).toFixed(2)+'%':'—', 'var(--red)'],
+                ['Colateral', '$'+fmt(r.collateral), 'var(--gold)'],
+                ['Dívida', '$'+fmt(r.debt), 'var(--amber)'],
+                ['LTV Actual', fmt(r.ltv,2)+'%', ltvColor],
+                ['Disponível p/ Borrow', '$'+fmt(r.available||0), 'var(--blue)'],
+              ].map(([l,v,c])=>`<div style="background:var(--bg3);padding:0.7rem 0.85rem;border-radius:var(--radius)"><div style="font-family:var(--mono);font-size:0.55rem;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:0.25rem">${l}</div><div style="font-family:var(--display);font-size:1.3rem;color:${c}">${v}</div></div>`).join('')}
+            </div>
+            <div style="margin-top:1rem;font-family:var(--mono);font-size:0.7rem;color:var(--muted)">
+              <a href="https://app.aave.com/?marketName=proto_${r.chainKey === 'eth' ? 'mainnet' : r.chainKey}_v3" target="_blank" style="color:var(--gold);text-decoration:none">→ Abrir em app.aave.com</a>
+            </div>
+          </div>
+        </td></tr>`;
+      }
+    }
+    return row;
+  }).join('');
+
+  // Build footer with totals
+  const totalLtv = totalCol > 0 ? (totalDebt/totalCol*100) : 0;
+  const totalLtvColor = totalLtv>70 ? 'var(--red)' : totalLtv>50 ? 'var(--gold)' : 'var(--green)';
+  const totalHfColor = !minHF ? 'var(--muted)' : minHF<1.2 ? 'var(--red)' : minHF<1.5 ? 'var(--gold)' : 'var(--green)';
+
+  return `<div class="table-wrap"><table>
+    <thead><tr>
+      <th style="width:28px"></th>
+      <th>Protocolo</th>
+      <th>Rede</th>
+      <th>Colateral</th>
+      <th>Dívida</th>
+      <th>HF</th>
+      <th>LTV</th>
+      <th>Disponível</th>
+    </tr></thead>
+    <tbody>${tableRows}</tbody>
+    <tfoot><tr style="background:var(--bg2);border-top:2px solid var(--gold)">
+      <td></td>
+      <td colspan="2" style="font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--gold)">⬡ Total Agregado</td>
+      <td class="mono gold" style="font-weight:700">$${fmt(totalCol)}</td>
+      <td class="mono amber" style="font-weight:700">$${fmt(totalDebt)}</td>
+      <td class="mono" style="color:${totalHfColor};font-weight:700">${minHF?minHF.toFixed(3):'—'}<span style="font-size:0.6rem;color:var(--muted)"> min</span></td>
+      <td><div class="prog-wrap"><div class="prog-bar prog-gold" style="width:${Math.min(100,totalLtv)}%"></div></div><span style="font-family:var(--mono);font-size:0.62rem;color:${totalLtvColor}">${fmt(totalLtv,1)}%</span></td>
+      <td></td>
+    </tr></tfoot>
+  </table></div>`;
+}
+
+function renderMorphoMarketCard(m) {
+  const hfColor = !m.hf ? 'var(--muted)' : m.hf<1.2 ? 'var(--red)' : m.hf<1.5 ? 'var(--gold)' : 'var(--green)';
+  const utilColor = m.utilization>0.9 ? 'var(--red)' : m.utilization>0.7 ? 'var(--gold)' : 'var(--green)';
+  return `<div style="background:var(--bg3);border:1px solid ${hfColor};border-radius:var(--radius);padding:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <div>
+        <div style="font-family:var(--display);font-size:1.1rem;color:var(--white)">${m.colSym} → ${m.loanSym}</div>
+        <div style="font-family:var(--mono);font-size:0.58rem;color:var(--muted);letter-spacing:0.15em">${m.chain.toUpperCase()} · ${m.marketKey}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:var(--display);font-size:1.4rem;color:${hfColor}">${m.hf?m.hf.toFixed(3):'—'}</div>
+        <div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);letter-spacing:0.15em">HEALTH FACTOR</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.6rem">
+      <div style="padding:0.5rem 0.6rem;background:var(--bg);border-radius:2px">
+        <div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">Colateral</div>
+        <div style="color:var(--gold);font-weight:600">${m.colAmt.toFixed(4)} ${m.colSym}</div>
+        <div style="font-family:var(--mono);font-size:0.7rem;color:var(--muted)">$${fmt(m.collateralUsd)}</div>
+      </div>
+      <div style="padding:0.5rem 0.6rem;background:var(--bg);border-radius:2px">
+        <div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">Dívida</div>
+        <div style="color:var(--amber);font-weight:600">${m.borrowAmt.toFixed(4)} ${m.loanSym}</div>
+        <div style="font-family:var(--mono);font-size:0.7rem;color:var(--muted)">$${fmt(m.borrowUsd)}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem;font-family:var(--mono);font-size:0.68rem">
+      <div><span style="color:var(--muted);text-transform:uppercase;font-size:0.55rem;letter-spacing:0.15em">LLTV</span><br><span style="color:var(--white)">${fmt(m.lltv,1)}%</span></div>
+      <div><span style="color:var(--muted);text-transform:uppercase;font-size:0.55rem;letter-spacing:0.15em">Borrow APR</span><br><span style="color:var(--red)">${(m.borrowApy*100).toFixed(2)}%</span></div>
+      <div><span style="color:var(--muted);text-transform:uppercase;font-size:0.55rem;letter-spacing:0.15em">Utilização</span><br><span style="color:${utilColor}">${(m.utilization*100).toFixed(1)}%</span></div>
+    </div>
+    ${m.supplyUsd > 0 ? `<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);font-family:var(--mono);font-size:0.7rem">Supply (yield): <span style="color:var(--gold)">${m.supplyAmt.toFixed(4)} ${m.loanSym}</span> ($${fmt(m.supplyUsd)}) @ <span style="color:var(--green)">${(m.supplyApy*100).toFixed(2)}%</span></div>`:''}
+  </div>`;
 }
 
 function renderPositionsTable() {
@@ -1259,52 +1502,164 @@ function renderRecentHistory() {
 }
 
 // ══════════════════════════════════════════════════════════
-// PROTOCOLS TAB
+// POSIÇÕES TAB (replaces Protocolos)
 // ══════════════════════════════════════════════════════════
 function renderProtocols(w) {
-  const protos = Object.entries(PROTOCOLS);
+  // Determine which protocols have active positions
+  const activeProtos = [];
+  const inactiveProtos = [];
+  const comingSoonProtos = [];
+
+  Object.entries(PROTOCOLS).forEach(([key, proto]) => {
+    if (key === 'aave') {
+      const hasPosition = Object.entries(live.positions).filter(([k])=>k!=='morpho').some(([,p])=>p?.totalCollateral>0||p?.totalDebt>0);
+      if (hasPosition) activeProtos.push({key, proto});
+      else inactiveProtos.push({key, proto});
+    } else if (key === 'morpho') {
+      const m = live.positions['morpho'];
+      if (m && (m.totalCollateral>0 || m.totalDebt>0)) activeProtos.push({key, proto});
+      else inactiveProtos.push({key, proto});
+    } else {
+      // Compound, Spark, Maple, Kamino, Jupiter — not yet implemented
+      comingSoonProtos.push({key, proto});
+    }
+  });
+
   return `
-    <div class="section-row"><div class="section-label">Protocolos DeFi — Monitorização</div></div>
-    <div class="three-col" style="margin-bottom:1.5rem">
-      ${protos.map(([key,proto])=>{
-        const p = live.positions[`${key}_${activeChain}`] || null;
-        // Positions for AAVE are stored by chain key directly; other protocols would need their own storage
-const isActive = key==='aave'
-  ? proto.chains.some(c=>live.positions[c]?.totalCollateral>0)
-  : key==='morpho'
-  ? ((live.positions['morpho']?.totalCollateral||0)>0 || (live.positions['morpho']?.totalDebt||0)>0)
-  : proto.chains.some(c=>live.positions[`${key}_${c}`]?.totalCollateral>0);
-        const logoClass = `logo-${key}`;
-        return `<div class="proto-card${activeProto===key?' active':''}" onclick="setProto('${key}')">
-          <div class="proto-header">
-            <div class="proto-logo ${logoClass}" style="color:#fff;font-weight:700;font-size:0.6rem;display:flex;align-items:center;justify-content:center;text-transform:uppercase">${key.slice(0,2).toUpperCase()}</div>
-            <div class="proto-info">
-              <h3>${proto.name}</h3>
-              <small>${proto.chains.filter(c=>c!=='solana').map(c=>CHAINS[c]?.name||c).join(' · ')}</small>
-            </div>
-            ${isActive?'<span class="badge badge-green" style="margin-left:auto">Activo</span>':'<span class="badge badge-muted" style="margin-left:auto">Inactivo</span>'}
-          </div>
-          <div class="proto-metrics">
-            <div class="proto-metric"><div class="proto-metric-label">Colateral</div><div class="proto-metric-value sv-gold" style="font-size:0.95rem">$${fmt(getProtoCollateral(key,w))}</div></div>
-            <div class="proto-metric"><div class="proto-metric-label">Dívida</div><div class="proto-metric-value sv-amber" style="font-size:0.95rem">$${fmt(getProtoDebt(key,w))}</div></div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.3rem">${proto.chains.map(c=>`<span class="net-chip" style="border-color:${CHAINS[c]?.color||'var(--border)'}"><span class="chain-dot" style="background:${CHAINS[c]?.color||'#888'}"></span>${CHAINS[c]?.name||c}</span>`).join('')}</div>
-        </div>`;
-      }).join('')}
+    <div class="section-row">
+      <div class="section-label">Posições por Protocolo</div>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-outline btn-sm" onclick="refreshAll()">↻ Refresh</button>
+      </div>
     </div>
 
-    <div class="panel">
-      <div class="panel-head">
-        <span class="panel-title">⬡ ${PROTOCOLS[activeProto]?.name} — Posições Detalhadas</span>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          ${PROTOCOLS[activeProto]?.chains.filter(c=>c!=='solana').map(c=>`<button class="btn btn-xs" style="border:1px solid ${activeChain===c?CHAINS[c]?.color:'var(--border)'};color:${activeChain===c?CHAINS[c]?.color:'var(--muted)'};background:transparent" onclick="setChain('${c}')">${CHAINS[c]?.name||c}</button>`).join('')}
+    ${activeProtos.length === 0 ? `<div class="alert alert-info"><span>ℹ</span><div>Nenhuma posição activa em nenhum protocolo. Clica Refresh ou aguarda o próximo ciclo automático.</div></div>` : ''}
+
+    ${activeProtos.map(({key,proto})=>renderProtoFullDetail(key, proto, w)).join('')}
+
+    ${inactiveProtos.length > 0 ? `<div class="panel" style="margin-top:1.5rem;border-color:rgba(247,181,0,0.08)">
+      <div class="panel-head"><span class="panel-title" style="color:var(--muted)">⬡ Sem posição activa</span></div>
+      <div class="panel-body" style="display:flex;flex-wrap:wrap;gap:0.6rem">
+        ${inactiveProtos.map(({key,proto})=>`<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.8rem;background:var(--bg2);border-radius:var(--radius);opacity:0.6">
+          <div style="width:20px;height:20px;border-radius:50%;background:${proto.color};display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.5rem;color:#fff;font-weight:700">${key.slice(0,2).toUpperCase()}</div>
+          <span style="font-size:0.85rem">${proto.name}</span>
+          <span style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);letter-spacing:0.15em">${proto.chains.filter(c=>c!=='solana').map(c=>CHAINS[c]?.name?.slice(0,3).toUpperCase()).filter(Boolean).join('·')}</span>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <details style="margin-top:1.5rem">
+      <summary style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.22em;text-transform:uppercase;color:var(--muted);cursor:pointer;padding:0.75rem 0;border-top:1px solid var(--border);outline:none">
+        ⌄ Protocolos em breve (${comingSoonProtos.length})
+      </summary>
+      <div style="padding-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem">
+        ${comingSoonProtos.map(({key,proto})=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:0.85rem;opacity:0.55">
+          <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem">
+            <div style="width:22px;height:22px;border-radius:50%;background:${proto.color};display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.55rem;color:#fff;font-weight:700">${key.slice(0,2).toUpperCase()}</div>
+            <strong style="font-size:0.88rem">${proto.name}</strong>
+            <span class="badge badge-muted" style="margin-left:auto;font-size:0.5rem">Em breve</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);letter-spacing:0.15em">
+            ${proto.chains.map(c=>c==='solana'?'SOLANA':CHAINS[c]?.name?.slice(0,3).toUpperCase()).filter(Boolean).join(' · ')}
+          </div>
+        </div>`).join('')}
+      </div>
+    </details>
+  `;
+}
+
+function renderProtoFullDetail(key, proto, w) {
+  if (key === 'morpho') return renderMorphoFullDetail(w);
+  if (key === 'aave') return renderAaveFullDetail(w);
+  return '';
+}
+
+function renderAaveFullDetail(w) {
+  const aaveChains = Object.entries(live.positions)
+    .filter(([k,p])=>k!=='morpho' && p && (p.totalCollateral>0 || p.totalDebt>0));
+
+  if (!aaveChains.length) return '';
+
+  const totalCol = aaveChains.reduce((s,[,p])=>s+p.totalCollateral,0);
+  const totalDebt = aaveChains.reduce((s,[,p])=>s+p.totalDebt,0);
+  let minHF = null;
+  aaveChains.forEach(([,p])=>{ if(p.hf && (minHF===null||p.hf<minHF)) minHF=p.hf; });
+  const hfColor = !minHF?'var(--muted)':minHF<1.2?'var(--red)':minHF<1.5?'var(--gold)':'var(--green)';
+
+  return `<div class="panel" style="margin-bottom:1.3rem">
+    <div class="panel-head">
+      <div style="display:flex;align-items:center;gap:0.6rem">
+        <div style="width:32px;height:32px;border-radius:50%;background:#B6509E;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.65rem;color:#fff;font-weight:700">AA</div>
+        <div>
+          <div style="font-family:var(--display);font-size:1.3rem;color:#B6509E;line-height:1">AAVE V3</div>
+          <div style="font-family:var(--mono);font-size:0.58rem;color:var(--muted);letter-spacing:0.15em">${aaveChains.length} REDE${aaveChains.length>1?'S':''} ACTIVA${aaveChains.length>1?'S':''}</div>
         </div>
       </div>
-      <div class="panel-body">
-        ${renderProtoDetail(activeProto, activeChain, w)}
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+        <div style="text-align:right"><div class="stat-label">Colateral</div><div style="font-family:var(--display);font-size:1.3rem;color:var(--gold)">$${fmt(totalCol)}</div></div>
+        <div style="text-align:right"><div class="stat-label">Dívida</div><div style="font-family:var(--display);font-size:1.3rem;color:var(--amber)">$${fmt(totalDebt)}</div></div>
+        <div style="text-align:right"><div class="stat-label">HF Mín</div><div style="font-family:var(--display);font-size:1.3rem;color:${hfColor}">${minHF?minHF.toFixed(3):'—'}</div></div>
       </div>
     </div>
-  `;
+    <div class="panel-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
+        ${aaveChains.map(([k,p])=>{
+          const chain = CHAINS[k];
+          const ahfColor = !p.hf?'var(--muted)':p.hf<1.2?'var(--red)':p.hf<1.5?'var(--gold)':'var(--green)';
+          return `<div style="background:var(--bg2);border:1px solid ${ahfColor};border-radius:var(--radius);padding:1rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem">
+              <div style="display:flex;align-items:center;gap:0.4rem">
+                <span class="chain-dot" style="background:${chain?.color}"></span>
+                <strong style="color:${chain?.color}">${chain?.name}</strong>
+              </div>
+              <div style="text-align:right">
+                <div style="font-family:var(--display);font-size:1.4rem;color:${ahfColor};line-height:1">${p.hf?p.hf.toFixed(3):'—'}</div>
+                <div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);letter-spacing:0.15em">HEALTH FACTOR</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+              <div style="padding:0.45rem 0.55rem;background:var(--bg);border-radius:2px"><div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">Colateral</div><div class="gold mono" style="font-weight:600">$${fmt(p.totalCollateral)}</div></div>
+              <div style="padding:0.45rem 0.55rem;background:var(--bg);border-radius:2px"><div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">Dívida</div><div class="amber mono" style="font-weight:600">$${fmt(p.totalDebt)}</div></div>
+              <div style="padding:0.45rem 0.55rem;background:var(--bg);border-radius:2px"><div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">LTV</div><div class="mono" style="font-weight:600;color:${p.ltv>70?'var(--red)':p.ltv>50?'var(--gold)':'var(--green)'}">${fmt(p.ltv,2)}%</div></div>
+              <div style="padding:0.45rem 0.55rem;background:var(--bg);border-radius:2px"><div style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">Disponível</div><div class="blue mono" style="font-weight:600">$${fmt(p.available||0)}</div></div>
+            </div>
+            <div style="margin-top:0.5rem"><a href="https://app.aave.com" target="_blank" style="font-family:var(--mono);font-size:0.6rem;color:var(--gold);text-decoration:none">→ app.aave.com</a></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderMorphoFullDetail(w) {
+  const m = live.positions['morpho'];
+  if (!m || (m.totalCollateral===0 && m.totalDebt===0)) return '';
+
+  const hfColor = !m.hf?'var(--muted)':m.hf<1.2?'var(--red)':m.hf<1.5?'var(--gold)':'var(--green)';
+  const markets = m.positions || [];
+
+  return `<div class="panel" style="margin-bottom:1.3rem">
+    <div class="panel-head">
+      <div style="display:flex;align-items:center;gap:0.6rem">
+        <div style="width:32px;height:32px;border-radius:50%;background:#1C55FE;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:0.65rem;color:#fff;font-weight:700">MO</div>
+        <div>
+          <div style="font-family:var(--display);font-size:1.3rem;color:#1C55FE;line-height:1">Morpho Blue</div>
+          <div style="font-family:var(--mono);font-size:0.58rem;color:var(--muted);letter-spacing:0.15em">${markets.length} MERCADO${markets.length>1?'S':''} ACTIVO${markets.length>1?'S':''}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+        <div style="text-align:right"><div class="stat-label">Colateral+Supply</div><div style="font-family:var(--display);font-size:1.3rem;color:var(--gold)">$${fmt(m.totalCollateral)}</div></div>
+        <div style="text-align:right"><div class="stat-label">Dívida</div><div style="font-family:var(--display);font-size:1.3rem;color:var(--amber)">$${fmt(m.totalDebt)}</div></div>
+        <div style="text-align:right"><div class="stat-label">HF Mín</div><div style="font-family:var(--display);font-size:1.3rem;color:${hfColor}">${m.hf?m.hf.toFixed(3):'—'}</div></div>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:1rem">
+        ${markets.map(mkt=>renderMorphoMarketCard(mkt)).join('')}
+      </div>
+      <div style="margin-top:1rem"><a href="https://app.morpho.org" target="_blank" style="font-family:var(--mono);font-size:0.6rem;color:var(--gold);text-decoration:none">→ app.morpho.org</a></div>
+    </div>
+  </div>`;
 }
 
 function getProtoCollateral(proto, w) {
@@ -1879,13 +2234,7 @@ function renderSettings(w) {
       </div>
     </div>
 
-    <div class="panel" style="margin-top:1.3rem">
-      <div class="panel-head"><span class="panel-title">Widget HF Flutuante</span></div>
-      <div class="panel-body" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-        <p style="color:var(--muted);font-size:0.85rem">O widget flutuante mostra o HF mínimo em qualquer tab. Podes arrastá-lo para qualquer canto.</p>
-        <button class="btn btn-outline btn-sm" onclick="toggleWidget()">Mostrar/Ocultar Widget</button>
-      </div>
-    </div>
+
     <div class="panel" style="margin-top:1.3rem">
       <div class="panel-head"><span class="panel-title">⚠ Zona de Perigo</span></div>
       <div class="panel-body" style="display:flex;gap:0.75rem;flex-wrap:wrap">
@@ -1902,7 +2251,12 @@ function renderSettings(w) {
 async function fetchHF(chainKey, walletAddr) {
   const chain = CHAINS[chainKey];
   if (!chain?.aavePool || !walletAddr) return null;
-  const rpcs = chain.rpcs || [chain.rpc].filter(Boolean);
+  // Use Alchemy RPC as PRIMARY when available (more reliable)
+  const w = activeWallet();
+  let rpcs = chain.rpcs || [chain.rpc].filter(Boolean);
+  if (w?.alchemyKey && ALCHEMY_RPCS[chainKey]) {
+    rpcs = [ALCHEMY_RPCS[chainKey] + w.alchemyKey, ...rpcs];
+  }
   const sig = '0xbf92857c';
   const padded = walletAddr.slice(2).toLowerCase().padStart(64,'0');
   const body = JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:chain.aavePool,data:sig+padded},'latest']});
@@ -2183,7 +2537,7 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
-    // Morpho has a free GraphQL API
+    // Morpho GraphQL API - includes accrual interest, all chains
     const query = `{
       userByAddress(address: "${walletAddr.toLowerCase()}") {
         address
@@ -2194,12 +2548,20 @@ async function fetchMorphoPositions(walletAddr) {
           borrowAssetsUsd
           collateral
           collateralUsd
+          healthFactor
           market {
             uniqueKey
             loanAsset { symbol address decimals priceUsd }
             collateralAsset { symbol address decimals priceUsd }
             lltv
-            state { borrowApy supplyApy liquidityAssetsUsd }
+            state {
+              borrowApy
+              supplyApy
+              utilization
+              liquidityAssetsUsd
+              borrowAssetsUsd
+            }
+            morphoBlue { chain { id network } }
           }
         }
       }
@@ -2208,53 +2570,72 @@ async function fetchMorphoPositions(walletAddr) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query}),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(20000)
     });
     const j = await r.json();
+    if (j.errors) { console.warn('Morpho query errors:', j.errors); }
     const user = j.data?.userByAddress;
     if (!user?.marketPositions?.length) {
       console.log('Morpho: no positions found for', walletAddr);
+      live.positions['morpho'] = null;
       return;
     }
     let totalSupply = 0, totalBorrow = 0;
     const positions = [];
+    let minHF = null;
     user.marketPositions.forEach(pos => {
-      const supplyUsd    = pos.supplyAssetsUsd || 0;
-      const borrowUsd    = pos.borrowAssetsUsd || 0;
-      // collateralUsd = value of collateral deposited to back a borrow position
+      const supplyUsd     = pos.supplyAssetsUsd || 0;
+      const borrowUsd     = pos.borrowAssetsUsd || 0;
       const collateralUsd = pos.collateralUsd || 0;
-
       const hasActivity = supplyUsd > 0 || borrowUsd > 0 || collateralUsd > 0;
       if (!hasActivity) return;
 
-      // In Morpho Blue:
-      // - supplyUsd = yield-earning deposits (like AAVE supply)
-      // - collateralUsd = locked collateral backing a borrow
-      // - borrowUsd = outstanding debt
-      const colSideUsd = supplyUsd + collateralUsd; // total "locked" value
+      // Per-market HF (use API value if available, else compute from LLTV)
+      const lltv = pos.market?.lltv ? Number(pos.market.lltv) / 1e18 : 0.86;
+      const computedHF = borrowUsd > 0 ? (collateralUsd * lltv) / borrowUsd : null;
+      const marketHF = pos.healthFactor ? Number(pos.healthFactor) : computedHF;
+
+      if (marketHF !== null && (minHF === null || marketHF < minHF)) minHF = marketHF;
+
+      const colSideUsd = supplyUsd + collateralUsd;
       totalSupply += colSideUsd;
       totalBorrow += borrowUsd;
 
+      // Compute per-market accrued interest (rate * borrow * time approximation)
+      const borrowApy = pos.market?.state?.borrowApy ? Number(pos.market.state.borrowApy) : 0;
+      const utilization = pos.market?.state?.utilization ? Number(pos.market.state.utilization) : 0;
+      const chainId = pos.market?.morphoBlue?.chain?.id;
+      const networkName = pos.market?.morphoBlue?.chain?.network ||
+        (chainId === 1 ? 'ethereum' : chainId === 8453 ? 'base' : '?');
+
       positions.push({
-        loan:        pos.market?.loanAsset?.symbol || '?',
-        collateral:  pos.market?.collateralAsset?.symbol || '?',
+        marketKey:    pos.market?.uniqueKey?.slice(0,10) || '?',
+        loanSym:      pos.market?.loanAsset?.symbol || '?',
+        loanAddr:     pos.market?.loanAsset?.address,
+        loanDecimals: pos.market?.loanAsset?.decimals || 18,
+        loanPrice:    Number(pos.market?.loanAsset?.priceUsd) || 0,
+        colSym:       pos.market?.collateralAsset?.symbol || '?',
+        colAddr:      pos.market?.collateralAsset?.address,
+        colDecimals:  pos.market?.collateralAsset?.decimals || 18,
+        colPrice:     Number(pos.market?.collateralAsset?.priceUsd) || 0,
+        chain:        networkName,
+        lltv:         lltv * 100,
+        supplyAmt:    Number(pos.supplyAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
         supplyUsd,
+        colAmt:       Number(pos.collateral) / Math.pow(10, pos.market?.collateralAsset?.decimals||18),
         collateralUsd,
+        borrowAmt:    Number(pos.borrowAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
         borrowUsd,
-        supplyApy:  pos.market?.state?.supplyApy,
-        borrowApy:  pos.market?.state?.borrowApy,
-        lltv:       pos.market?.lltv,
+        hf:           marketHF,
+        supplyApy:    pos.market?.state?.supplyApy ? Number(pos.market.state.supplyApy) : 0,
+        borrowApy,
+        utilization,
       });
-      console.log(`Morpho pos: supply=$${supplyUsd.toFixed(2)} collateral=$${collateralUsd.toFixed(2)} borrow=$${borrowUsd.toFixed(2)} [${pos.market?.loanAsset?.symbol}/${pos.market?.collateralAsset?.symbol}]`);
+      console.log(`Morpho [${networkName}] ${pos.market?.collateralAsset?.symbol||'?'}/${pos.market?.loanAsset?.symbol||'?'}: col=$${collateralUsd.toFixed(2)} borrow=$${borrowUsd.toFixed(2)} HF=${marketHF?.toFixed(3)||'∞'}`);
     });
 
-    // Health factor for Morpho borrow positions (lltv-based)
-    const morphoHF = totalBorrow > 0
-      ? (totalSupply * 0.86) / totalBorrow  // 86% avg lltv approximation
-      : null;
-
     live.positions['morpho'] = {
-      hf:             morphoHF,
+      hf:              minHF,
       totalCollateral: totalSupply,
       totalDebt:       totalBorrow,
       available:       Math.max(0, totalSupply * 0.8 - totalBorrow),
@@ -2262,7 +2643,7 @@ async function fetchMorphoPositions(walletAddr) {
       positions,
       source: 'morpho_api',
     };
-    console.log(`Morpho total: collateral+supply=$${totalSupply.toFixed(2)} borrow=$${totalBorrow.toFixed(2)}`);
+    console.log(`Morpho total: locked=$${totalSupply.toFixed(2)} debt=$${totalBorrow.toFixed(2)} minHF=${minHF?.toFixed(3)||'—'} (${positions.length} markets)`);
     // Re-render to show Morpho data
     render();
   } catch(e) {
@@ -2322,27 +2703,54 @@ async function refreshAll() {
 // ══════════════════════════════════════════════════════════
 let lastAlertState = {};
 function checkAlerts(w) {
+  // AAVE per chain
   Object.entries(live.positions).forEach(([chain,p])=>{
-    if (!p?.hf) return;
-    const key = `${chain}_${p.hf<1.2?'crit':p.hf<1.5?'warn':'ok'}`;
+    if (chain==='morpho' || !p?.hf) return;
+    const key = `aave_${chain}_${p.hf<1.2?'crit':p.hf<1.5?'warn':'ok'}`;
     if (lastAlertState[chain]===key) return;
     lastAlertState[chain]=key;
+    const protoLabel = `AAVE ${CHAINS[chain]?.name}`;
     if (p.hf<1.2) {
-      toast(`⚠️ LIQUIDAÇÃO EM RISCO — ${CHAINS[chain]?.name}: HF ${p.hf.toFixed(3)}`,'danger',12000);
-      pushNotif(`DeFi Ghost: RISCO em ${CHAINS[chain]?.name}!`,`HF ${p.hf.toFixed(3)} — Liquidação iminente!`);
-      sendTelegram(w,`🚨 RISCO DE LIQUIDAÇÃO\nRede: ${CHAINS[chain]?.name}\nHealth Factor: ${p.hf.toFixed(3)}\nAction necessária agora!`);
+      toast(`⚠️ LIQUIDAÇÃO — ${protoLabel}: HF ${p.hf.toFixed(3)}`,'danger',12000);
+      pushNotif(`DeFi Ghost: RISCO em ${protoLabel}!`,`HF ${p.hf.toFixed(3)}`);
+      sendTelegram(w,`🚨 RISCO DE LIQUIDAÇÃO\nProtocolo: ${protoLabel}\nHealth Factor: ${p.hf.toFixed(3)}\nAction necessária!`);
       updateAvatarState('danger');
     } else if (p.hf<1.5) {
-      toast(`⚠ Atenção — ${CHAINS[chain]?.name}: HF ${p.hf.toFixed(3)}`,'warn',7000);
+      toast(`⚠ Atenção — ${protoLabel}: HF ${p.hf.toFixed(3)}`,'warn',7000);
       updateAvatarState('warn');
-    } else {
-      updateAvatarState('safe');
     }
   });
+  // Morpho per market
+  const morpho = live.positions['morpho'];
+  if (morpho?.positions) {
+    morpho.positions.forEach((pos,i)=>{
+      if (!pos.hf || pos.borrowUsd<=0) return;
+      const alertKey = `morpho_${pos.marketKey}_${pos.hf<1.2?'crit':pos.hf<1.5?'warn':'ok'}`;
+      if (lastAlertState[pos.marketKey]===alertKey) return;
+      lastAlertState[pos.marketKey]=alertKey;
+      const label = `Morpho ${pos.colSym}/${pos.loanSym}`;
+      if (pos.hf<1.2) {
+        toast(`⚠️ LIQUIDAÇÃO — ${label}: HF ${pos.hf.toFixed(3)}`,'danger',12000);
+        pushNotif(`DeFi Ghost: RISCO ${label}!`,`HF ${pos.hf.toFixed(3)}`);
+        sendTelegram(w,`🚨 RISCO DE LIQUIDAÇÃO\nProtocolo: ${label}\nHealth Factor: ${pos.hf.toFixed(3)}`);
+        updateAvatarState('danger');
+      } else if (pos.hf<1.5) {
+        toast(`⚠ Atenção — ${label}: HF ${pos.hf.toFixed(3)}`,'warn',7000);
+        updateAvatarState('warn');
+      }
+    });
+  }
+  // If nothing critical, set safe
+  let anyDanger=false, anyWarn=false;
+  Object.entries(live.positions).forEach(([k,p])=>{
+    if (k==='morpho') {
+      p?.positions?.forEach(pos=>{ if(pos.hf<1.2) anyDanger=true; else if(pos.hf<1.5) anyWarn=true; });
+    } else if (p?.hf) {
+      if (p.hf<1.2) anyDanger=true; else if (p.hf<1.5) anyWarn=true;
+    }
+  });
+  updateAvatarState(anyDanger?'danger':anyWarn?'warn':'safe');
   updateHFPill();
-  updateWidget();
-  // If widget is visible, make sure it has the latest value
-  if (widgetVisible) updateWidget();
 }
 
 function updateHFPill() {
@@ -2361,21 +2769,7 @@ function updateAvatarState(state) {
   if (av) { av.className='brand-avatar '+state; }
 }
 
-function updateWidget() {
-  const widget = document.getElementById('hfWidget');
-  const num = document.getElementById('hfWidgetNum');
-  if (!widget||!num) return;
-  let minHF=null;
-  Object.values(live.positions).forEach(p=>{ if(p?.hf!==null&&p?.hf!==undefined){if(minHF===null||p.hf<minHF)minHF=p.hf;}});
-  if (minHF===null) {
-    num.textContent='—';
-    num.className='hf-widget-num sv-muted';
-    return;
-  }
-  num.textContent = minHF.toFixed(2);
-  num.className = minHF<1.2?'hf-widget-num sv-red':minHF<1.5?'hf-widget-num sv-gold':'hf-widget-num sv-green';
-  widget.className = 'hf-widget '+(minHF<1.2?'danger':minHF<1.5?'warn':'safe');
-}
+function updateWidget() { /* removed */ }
 
 function pushNotif(title, body) {
   if ('Notification' in window && Notification.permission==='granted') new Notification(title,{body});
@@ -2849,25 +3243,8 @@ function clearAll() {
   saveState(); render(); toast('Dados apagados','info');
 }
 
-// ══════════════════════════════════════════════════════════
-// WIDGET (draggable)
-// ══════════════════════════════════════════════════════════
-let widgetVisible=false;
-function startWidget() {
-  const w=document.getElementById('hfWidget');
-  if(!w)return;
-  let dragging=false,ox=0,oy=0;
-  w.addEventListener('mousedown',e=>{ dragging=true; ox=e.clientX-w.getBoundingClientRect().left; oy=e.clientY-w.getBoundingClientRect().top; });
-  document.addEventListener('mousemove',e=>{ if(!dragging)return; w.style.right='auto'; w.style.bottom='auto'; w.style.left=(e.clientX-ox)+'px'; w.style.top=(e.clientY-oy)+'px'; });
-  document.addEventListener('mouseup',()=>dragging=false);
-}
-
-function toggleWidget() {
-  widgetVisible=!widgetVisible;
-  const w=document.getElementById('hfWidget');
-  if(w) w.classList.toggle('hidden',!widgetVisible);
-  if(widgetVisible) updateWidget(); // refresh value when shown
-}
+// Widget removed in v2.1
+let widgetVisible = false;
 
 // ══════════════════════════════════════════════════════════
 // CANVAS ANIMATION
