@@ -1101,45 +1101,56 @@ async function testMorphoAPI() {
   if (!el) return;
   if (!w?.addr) { el.innerHTML = '<span style="color:var(--red)">Sem wallet</span>'; return; }
 
-  el.innerHTML = '<span style="color:var(--muted)">A consultar Morpho API (Ethereum + Base)...</span>';
+  el.innerHTML = '<span style="color:var(--muted)">A consultar Morpho API...</span>';
   const lines = ['<span style="color:var(--muted)">URL: https://blue-api.morpho.org/graphql</span>'];
   lines.push('<span style="color:var(--muted)">Wallet: '+w.addr+'</span>');
-  lines.push('<span style="color:var(--muted)">Query: per-chain (chainId=1 + chainId=8453)</span>');
 
-  // Query each chain separately
-  const CHAIN_IDS = [{id: 1, name: 'Ethereum'}, {id: 8453, name: 'Base'}];
-  const allPositions = [];
-  let allErrors = [];
+  // Single query (Morpho returns positions across all chains by default)
+  const query = `{userByAddress(address:"${w.addr.toLowerCase()}"){address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
 
-  for (const c of CHAIN_IDS) {
-    const query = `{userByAddress(address:"${w.addr.toLowerCase()}", chainId: ${c.id}){address marketPositions(first:100){supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
+  let j = null;
+  try {
+    const r = await fetch('https://blue-api.morpho.org/graphql', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query}), signal: AbortSignal.timeout(20000)
+    });
+    j = await r.json();
+  } catch(fe) {
+    lines.push('<span style="color:var(--red)">Erro fetch: '+fe.message+'</span>');
+    el.innerHTML = lines.join('<br>');
+    return;
+  }
+
+  if (j.errors) {
+    lines.push('<span style="color:var(--red)">Erros GraphQL:</span>');
+    j.errors.forEach(e => lines.push('<span style="color:var(--red)">  '+e.message+'</span>'));
+  }
+
+  let positions = j.data?.userByAddress?.marketPositions || [];
+
+  // Try alt query if main returns nothing
+  if (positions.length === 0) {
+    lines.push('<span style="color:var(--muted)">Query principal: 0. A tentar query alternativa users(items)...</span>');
     try {
-      const r = await fetch('https://blue-api.morpho.org/graphql', {
+      const altQuery = `{users(where:{address_in:["${w.addr.toLowerCase()}"]}){items{address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}}`;
+      const r2 = await fetch('https://blue-api.morpho.org/graphql', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({query}), signal: AbortSignal.timeout(20000)
+        body: JSON.stringify({query: altQuery}), signal: AbortSignal.timeout(20000)
       });
-      const j = await r.json();
-      const positions = j.data?.userByAddress?.marketPositions || [];
-      lines.push('<span style="color:'+(positions.length>0?'var(--green)':'var(--muted)')+'">[chainId '+c.id+' '+c.name+']: '+positions.length+' posições</span>');
-      if (j.errors) {
-        j.errors.forEach(e => { allErrors.push('chain '+c.id+': '+e.message); });
+      const j2 = await r2.json();
+      if (j2.errors) j2.errors.forEach(e => lines.push('<span style="color:var(--red)">alt: '+e.message+'</span>'));
+      const altUser = j2.data?.users?.items?.[0];
+      if (altUser?.marketPositions?.length) {
+        positions = altUser.marketPositions;
+        lines.push('<span style="color:var(--green)">Query alt retornou: '+positions.length+' posições</span>');
+        j = j2;
       }
-      positions.forEach(p => allPositions.push(p));
-    } catch(e) {
-      lines.push('<span style="color:var(--red)">[chain '+c.id+']: '+e.message+'</span>');
+    } catch(e2) {
+      lines.push('<span style="color:var(--red)">Alt fetch erro: '+e2.message+'</span>');
     }
   }
 
-  if (allErrors.length > 0) {
-    lines.push('<span style="color:var(--red)">Erros GraphQL:</span>');
-    allErrors.forEach(err => lines.push('<span style="color:var(--red)">  '+err+'</span>'));
-  }
-
-  lines.push('<span style="color:'+(allPositions.length>0?'var(--green)':'var(--gold)')+'">Total agregado: '+allPositions.length+' posições</span>');
-
-  // Iterate positions for display
-  const positions = allPositions;
-  const j = { data: { userByAddress: { marketPositions: allPositions }}};
+  lines.push('<span style="color:'+(positions.length>0?'var(--green)':'var(--gold)')+'">Posições retornadas: '+positions.length+'</span>');
 
   try {
 
@@ -3075,7 +3086,7 @@ async function fetchMorphoPositions(walletAddr) {
     const query = `{
       userByAddress(address: "${walletAddr.toLowerCase()}") {
         address
-        marketPositions(first: 1000) {
+        marketPositions {
           supplyAssets supplyAssetsUsd
           borrowAssets borrowAssetsUsd
           collateral collateralUsd
@@ -3111,7 +3122,7 @@ async function fetchMorphoPositions(walletAddr) {
     if (!user?.marketPositions?.length) {
       console.log('Morpho first-pass returned 0, trying users(items) format...');
       try {
-        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions(first:1000){supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
+        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
         const r2 = await fetch('https://blue-api.morpho.org/graphql', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({query: altQuery}),
