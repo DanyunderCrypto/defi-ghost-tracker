@@ -1953,27 +1953,71 @@ function renderUpcomingExemptions(w) {
 }
 
 function renderRecentHistory() {
-  const all=[];
-  Object.entries(live.history).forEach(([chain,evts])=>{ if(Array.isArray(evts)) evts.forEach(e=>all.push({...e,chain})); });
-  if (!all.length) return         `<div class="empty"><span class="empty-icon">📡</span>
-          <p style="font-size:0.85rem;margin-bottom:1rem">Sem histórico encontrado.</p>
-          <p style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);line-height:1.8">
-            ${activeWallet()?.apiKey ? '✓ API Key configurada' : '✗ Sem API Key — Config → Guardar API Key'}<br>
-            Redes com posição: ${Object.entries(live.positions).filter(([,p])=>p?.totalCollateral>0).map(([k])=>k).join(', ')||'nenhuma carregada ainda'}<br>
-            Transacções: ${state.txs.filter(t=>t.walletId===activeWallet()?.id).length} manuais importadas
-          </p>
-          <button class="btn btn-gold btn-sm" style="margin-top:1rem" onclick="refreshAll()">↻ Tentar Novamente</button>
-        </div>`;
-  return `<table><thead><tr><th>Data/Hora</th><th>Rede</th><th>Tipo</th><th>Ativo</th><th>Valor USD</th><th>TX Hash</th></tr></thead><tbody>
-    ${all.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).slice(0,25).map(e=>`<tr>
-      <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}):e.blockNumber?'Bloco #'+e.blockNumber:'—'}</td>
-      <td><span class="chain-dot" style="background:${CHAINS[e.chain]?.color}"></span> <span style="color:${CHAINS[e.chain]?.color};font-size:0.8rem">${CHAINS[e.chain]?.name||e.chain}</span></td>
-      <td><span style="color:${e.type==='supply'?'var(--green)':e.type==='borrow'?'var(--amber)':e.type==='repay'?'var(--blue)':e.type==='withdraw'?'var(--gold)':'var(--red)'};font-weight:700">${(e.type||'?').toUpperCase()}</span></td>
-      <td style="font-weight:600">${e.asset||'—'}</td>
-      <td class="mono gold">$${fmt(e.amountUSD||0)}</td>
-      <td class="txhash">${e.txhash?`<a href="${CHAINS[e.chain]?.explorer}/tx/${e.txhash}" target="_blank">${truncTx(e.txhash)}</a>`:'—'}</td>
-    </tr>`).join('')}
-  </tbody></table>`;
+  const all = [];
+  Object.entries(live.history).forEach(([chain, evts]) => {
+    if (Array.isArray(evts)) evts.forEach(e => all.push({...e, chain}));
+  });
+  
+  // Filter: by default hide events with $0 value (junk: BUSDC internal mint/burn, etc.)
+  const showZero = state.showZeroValue === true;
+  const filtered = showZero ? all : all.filter(e => (e.amountUSD || 0) > 0.01);
+  filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  const display = filtered.slice(0, 30);
+
+  if (!all.length) {
+    return `<div class="empty"><span class="empty-icon">📡</span>
+      <p style="font-size:0.85rem;margin-bottom:1rem">Sem histórico encontrado.</p>
+      <p style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);line-height:1.8">
+        ${activeWallet()?.alchemyKey ? '✓ Alchemy Key configurada' : '✗ Sem Alchemy Key — Config'}<br>
+        Redes com posição: ${Object.entries(live.positions).filter(([,p])=>p?.totalCollateral>0).map(([k])=>k).join(', ')||'nenhuma'}<br>
+      </p>
+      <button class="btn btn-gold btn-sm" onclick="refreshAll()">↻ Tentar novamente</button>
+    </div>`;
+  }
+
+  if (!display.length && !showZero) {
+    return `<div class="empty">
+      <span class="empty-icon">📭</span>
+      <p style="font-size:0.85rem">Nenhuma transacção com valor USD detectado.</p>
+      <p style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);margin-bottom:0.75rem">${all.length} transações foram filtradas por terem valor $0 (internos do aToken, tokens sem cotação).</p>
+      <button class="btn btn-outline btn-sm" onclick="state.showZeroValue=true;saveState();render()">Mostrar mesmo assim (${all.length})</button>
+    </div>`;
+  }
+
+  return `<div style="padding:0.5rem 1rem;display:flex;gap:0.5rem;align-items:center;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em">
+    <span>Filtro:</span>
+    <button class="btn btn-xs ${!showZero?'btn-gold':'btn-outline'}" onclick="state.showZeroValue=false;saveState();render()">Só com valor (${all.filter(e=>(e.amountUSD||0)>0.01).length})</button>
+    <button class="btn btn-xs ${showZero?'btn-gold':'btn-outline'}" onclick="state.showZeroValue=true;saveState();render()">Todas (${all.length})</button>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Data</th><th>Rede</th><th>Tipo</th><th>Ativo</th>
+      <th style="text-align:right">USD</th>
+      <th style="text-align:right">EUR</th>
+      <th>TX</th>
+    </tr></thead>
+    <tbody>
+    ${display.map(e => {
+      const usd = e.amountUSD || 0;
+      const eur = usd * (live.eurRate || 0.92);
+      const typeColor = {supply:'var(--green)',withdraw:'var(--gold)',borrow:'var(--red)',repay:'var(--blue)',morpho_supply:'var(--green)',morpho_borrow:'var(--red)'}[e.type] || 'var(--muted)';
+      const typeLabel = e.type?.replace('morpho_','').toUpperCase() || '?';
+      const dateStr = e.timestamp ? new Date(e.timestamp*1000).toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '—';
+      const timeStr = e.timestamp ? new Date(e.timestamp*1000).toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}) : '';
+      const valColor = usd > 0 ? '' : 'color:var(--muted)';
+      const explorerUrl = e.txhash && CHAINS[e.chain]?.explorer ? `${CHAINS[e.chain].explorer}/tx/${e.txhash}` : null;
+      return `<tr>
+        <td class="mono muted" style="font-size:0.7rem">${dateStr}<br><span style="opacity:0.6">${timeStr}</span></td>
+        <td><span class="chain-dot" style="background:${CHAINS[e.chain]?.color||'#888'}"></span> ${CHAINS[e.chain]?.name || e.chain}</td>
+        <td><span style="color:${typeColor};font-weight:600;font-family:var(--mono);font-size:0.7rem;letter-spacing:0.1em">${typeLabel}</span></td>
+        <td><span style="font-weight:600">${e.asset || '?'}</span><br><span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${(e.amountCrypto||0).toFixed(4)}</span></td>
+        <td class="mono gold" style="text-align:right;${valColor}">$${usd.toFixed(2)}</td>
+        <td class="mono blue" style="text-align:right;${valColor}">€${eur.toFixed(2)}</td>
+        <td class="mono muted" style="font-size:0.6rem">${explorerUrl?`<a href="${explorerUrl}" target="_blank" style="color:var(--gold);text-decoration:none">${(e.txhash||'').slice(0,8)}…${(e.txhash||'').slice(-4)}</a>`:'—'}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
 }
 
 // ══════════════════════════════════════════════════════════
