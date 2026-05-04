@@ -1347,76 +1347,7 @@ async function testAlchemyAPI(chainKey) {
   el.innerHTML = lines.join('<br>');
 }
 
-async function testHistoryAPI(chainKey) {
-  const w = activeWallet();
-  const el = document.getElementById('histDiagResult');
-  if (!el) return;
-  if (!w?.addr) { el.innerHTML = '<span style="color:var(--red)">Sem wallet configurada</span>'; return; }
-  if (!w?.apiKey) { el.innerHTML = '<span style="color:var(--red)">Sem API Key configurada — vai a Config e guarda a API Key</span>'; return; }
-
-  const chain = CHAINS[chainKey];
-  if (!chain?.explorerApi) { el.innerHTML = `<span style="color:var(--red)">Chain ${chainKey} não tem explorerApi</span>`; return; }
-
-  el.innerHTML = `<span style="color:var(--muted)">A testar ${chain.name}... (pode demorar 5-10s)</span>`;
-
-  const url = `https://api.etherscan.io/v2/api?chainid=${chain.id}&module=account&action=tokentx&address=${w.addr}&startblock=0&endblock=99999999&sort=desc&apikey=${w.apiKey}&offset=20&page=1`;
-  const displayUrl = url.replace(w.apiKey, '***KEY***');
-
-  let lines = [`<span style="color:var(--muted)">URL: ${displayUrl}</span>`];
-
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-    const statusCode = res.status;
-    lines.push(`<span style="color:var(--muted)">HTTP Status: ${statusCode}</span>`);
-
-    if (!res.ok) {
-      lines.push(`<span style="color:var(--red)">❌ HTTP Error ${statusCode} — o Basescan bloqueou o pedido</span>`);
-      el.innerHTML = lines.join('<br>');
-      return;
-    }
-
-    const j = await res.json();
-    lines.push(`<span style="color:var(--muted)">API Status: "${j.status}" | Message: "${j.message}"</span>`);
-
-    if (j.status === '0') {
-      lines.push(`<span style="color:var(--red)">❌ API respondeu com erro: ${j.message} — ${JSON.stringify(j.result).slice(0,100)}</span>`);
-      if (j.message?.includes('Invalid')) lines.push(`<span style="color:var(--gold)">⚠ API Key inválida. Vai a etherscan.io → My Account → API Keys e cria/copia a key.</span>`);
-      if (j.message?.includes('deprecated') || j.result?.includes?.('deprecated')) lines.push(`<span style="color:var(--gold)">⚠ Endpoint deprecated — já corrigido na V2, tenta de novo após actualizar.</span>`);
-      el.innerHTML = lines.join('<br>');
-      return;
-    }
-
-    const txs = j.result || [];
-    lines.push(`<span style="color:var(--green)">✓ API funcionou! ${txs.length} transferências encontradas</span>`);
-
-    if (txs.length === 0) {
-      lines.push(`<span style="color:var(--muted)">Sem transferências ERC20 para este endereço em ${chain.name}</span>`);
-    } else {
-      // Show all token symbols found
-      const symbols = [...new Set(txs.map(t => t.tokenSymbol).filter(Boolean))];
-      lines.push(`<span style="color:var(--muted)">Símbolos encontrados: ${symbols.join(', ')}</span>`);
-
-      // Check which match aToken pattern
-      const aTokensFound = txs.filter(t => /^a[A-Z]/.test(t.tokenSymbol||''));
-      lines.push(`<span style="color:${aTokensFound.length>0?'var(--green)':'var(--gold)'}">aTokens detectados: ${aTokensFound.length} (${aTokensFound.map(t=>t.tokenSymbol).join(', ')||'nenhum'})</span>`);
-
-      // Show first 5 raw transfers
-      lines.push(`<span style="color:var(--muted)">── Últimas 5 transferências ──</span>`);
-      txs.slice(0,5).forEach(t => {
-        const date = new Date(parseInt(t.timeStamp)*1000).toLocaleDateString('pt-PT');
-        lines.push(`<span style="color:var(--white)">${date} | ${t.tokenSymbol} | from:${t.from?.slice(0,8)}... to:${t.to?.slice(0,8)}... | ${(Number(t.value)/Math.pow(10,parseInt(t.tokenDecimal)||18)).toFixed(4)}</span>`);
-      });
-    }
-  } catch(e) {
-    lines.push(`<span style="color:var(--red)">❌ Erro: ${e.message}</span>`);
-    if (e.name === 'AbortError') lines.push(`<span style="color:var(--gold)">Timeout — a API demorou mais de 20 segundos a responder</span>`);
-    if (e.message?.includes('CORS') || e.message?.includes('fetch')) {
-      lines.push(`<span style="color:var(--gold)">⚠ Possível bloqueio CORS — o Basescan pode estar a bloquear pedidos da tua origem</span>`);
-    }
-  }
-
-  el.innerHTML = lines.join('<br>');
-}
+// testHistoryAPI removed (Etherscan deprecated)
 
 // ══════════════════════════════════════════════════════════
 // CONNECTION TEST
@@ -3371,204 +3302,115 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
 }
 
 async function fetchMorphoPositions(walletAddr) {
+  console.log('[Morpho] Starting fetch for', walletAddr);
   if (!walletAddr) return;
+
+  const w = activeWallet();
+  if (!w?.alchemyKey) {
+    console.warn('[Morpho] No Alchemy key — cannot fetch on-chain');
+    return;
+  }
+
+  const positions = [];
+  let totalSupply = 0, totalBorrow = 0, minHF = null;
+
+  // STEP 1: Try Morpho API first (works for Ethereum mainnet, doesn't work for Base reliably)
   try {
-    // Morpho GraphQL API - using NEW non-deprecated fields (state.*)
-    // Old fields will be removed 2026-05-20
-    const query = `{
-      userByAddress(address: "${walletAddr.toLowerCase()}") {
-        address
-        marketPositions {
-          state {
-            supplyAssets
-            supplyAssetsUsd
-            borrowAssets
-            borrowAssetsUsd
-            collateral
-            collateralUsd
-          }
-          healthFactor
-          market {
-            uniqueKey
-            loanAsset { symbol address decimals priceUsd }
-            collateralAsset { symbol address decimals priceUsd }
-            lltv
-            state {
-              borrowApy
-              supplyApy
-              utilization
-            }
-            morphoBlue {
-              chain { id network }
-            }
-          }
-        }
-      }
-    }`;
-
-    let r;
-    try {
-      r = await fetch('https://blue-api.morpho.org/graphql', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({query}),
-        signal: AbortSignal.timeout(20000)
-      });
-    } catch(fe) {
-      console.warn('Morpho fetch failed:', fe.message);
-      return;
-    }
+    const query = `{userByAddress(address:"${walletAddr.toLowerCase()}"){address marketPositions{state{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd}healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}`;
+    const r = await fetch('https://blue-api.morpho.org/graphql', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query}),
+      signal: AbortSignal.timeout(15000)
+    });
     const j = await r.json();
-    if (j.errors) console.warn('Morpho GraphQL errors:', j.errors);
-    let user = j.data?.userByAddress;
+    const apiPositions = j.data?.userByAddress?.marketPositions || [];
+    console.log(`[Morpho] API returned ${apiPositions.length} positions`);
 
-    // Fallback: try alternate users(items) format if first query returns nothing
-    if (!user?.marketPositions?.length) {
-      console.log('Morpho first-pass returned 0, trying users(items) format...');
-      try {
-        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions{state{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd}healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
-        const r2 = await fetch('https://blue-api.morpho.org/graphql', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({query: altQuery}),
-          signal: AbortSignal.timeout(20000)
-        });
-        const j2 = await r2.json();
-        if (j2.errors) console.warn('Morpho alt errors:', j2.errors);
-        const altUser = j2.data?.users?.items?.[0];
-        if (altUser?.marketPositions?.length) {
-          user = altUser;
-          console.log(`Morpho alt query: ${altUser.marketPositions.length} positions`);
-        }
-      } catch(e2) { console.warn('Morpho alt failed:', e2.message); }
-    }
-        console.log(`Morpho API returned ${user.marketPositions.length} market positions`);
-    let totalSupply = 0, totalBorrow = 0;
-    const positions = [];
-    let minHF = null;
-    user.marketPositions.forEach(pos => {
-      // NEW API: data is now in pos.state (with fallback to deprecated top-level fields)
+    apiPositions.forEach(pos => {
       const ps = pos.state || {};
-      const supplyUsd     = ps.supplyAssetsUsd ?? pos.supplyAssetsUsd ?? 0;
-      const borrowUsd     = ps.borrowAssetsUsd ?? pos.borrowAssetsUsd ?? 0;
-      const collateralUsd = ps.collateralUsd ?? pos.collateralUsd ?? 0;
-      const supplyAssetsRaw     = ps.supplyAssets ?? pos.supplyAssets ?? '0';
-      const borrowAssetsRaw     = ps.borrowAssets ?? pos.borrowAssets ?? '0';
-      const collateralAssetsRaw = ps.collateral ?? pos.collateral ?? '0';
-
-      const hasActivity = supplyUsd > 0 || borrowUsd > 0 || collateralUsd > 0;
-      if (!hasActivity) return;
+      const supplyUsd = Number(ps.supplyAssetsUsd) || 0;
+      const borrowUsd = Number(ps.borrowAssetsUsd) || 0;
+      const collateralUsd = Number(ps.collateralUsd) || 0;
+      if (supplyUsd === 0 && borrowUsd === 0 && collateralUsd === 0) return;
 
       const lltv = pos.market?.lltv ? Number(pos.market.lltv) / 1e18 : 0.86;
-      const computedHF = borrowUsd > 0 ? (collateralUsd * lltv) / borrowUsd : null;
-      const marketHF = pos.healthFactor ? Number(pos.healthFactor) : computedHF;
-
-      if (marketHF !== null && (minHF === null || marketHF < minHF)) minHF = marketHF;
-
-      const colSideUsd = supplyUsd + collateralUsd;
-      totalSupply += colSideUsd;
-      totalBorrow += borrowUsd;
-
-      const borrowApy = pos.market?.state?.borrowApy ? Number(pos.market.state.borrowApy) : 0;
-      const utilization = pos.market?.state?.utilization ? Number(pos.market.state.utilization) : 0;
+      const hf = pos.healthFactor ? Number(pos.healthFactor) : (borrowUsd > 0 ? (collateralUsd * lltv) / borrowUsd : null);
       const chainId = pos.market?.morphoBlue?.chain?.id;
-      const networkName = pos.market?.morphoBlue?.chain?.network ||
-        (chainId === 1 ? 'ethereum' : chainId === 8453 ? 'base' : '?');
-
-      const loanDecimals = pos.market?.loanAsset?.decimals || 18;
-      const colDecimals = pos.market?.collateralAsset?.decimals || 18;
+      const networkName = chainId === 1 ? 'ethereum' : chainId === 8453 ? 'base' : (pos.market?.morphoBlue?.chain?.network || '?');
 
       positions.push({
-        marketKey:    pos.market?.uniqueKey?.slice(0,10) || pos.market?.marketId?.slice(0,10) || '?',
-        loanSym:      pos.market?.loanAsset?.symbol || '?',
-        loanAddr:     pos.market?.loanAsset?.address,
-        loanDecimals,
-        loanPrice:    Number(pos.market?.loanAsset?.priceUsd) || 0,
-        colSym:       pos.market?.collateralAsset?.symbol || '?',
-        colAddr:      pos.market?.collateralAsset?.address,
-        colDecimals,
-        colPrice:     Number(pos.market?.collateralAsset?.priceUsd) || 0,
-        chain:        networkName,
-        lltv:         lltv * 100,
-        supplyAmt:    Number(supplyAssetsRaw) / Math.pow(10, loanDecimals),
+        marketKey: pos.market?.uniqueKey?.slice(0, 10) || '?',
+        marketIdFull: pos.market?.uniqueKey || '',
+        loanSym: pos.market?.loanAsset?.symbol || '?',
+        colSym: pos.market?.collateralAsset?.symbol || '?',
+        chain: networkName,
+        lltv: lltv * 100,
+        supplyAmt: Number(ps.supplyAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
         supplyUsd,
-        colAmt:       Number(collateralAssetsRaw) / Math.pow(10, colDecimals),
+        colAmt: Number(ps.collateral) / Math.pow(10, pos.market?.collateralAsset?.decimals||18),
         collateralUsd,
-        borrowAmt:    Number(borrowAssetsRaw) / Math.pow(10, loanDecimals),
+        borrowAmt: Number(ps.borrowAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
         borrowUsd,
-        hf:           marketHF,
-        supplyApy:    pos.market?.state?.supplyApy ? Number(pos.market.state.supplyApy) : 0,
-        borrowApy,
-        utilization,
+        hf,
+        supplyApy: Number(pos.market?.state?.supplyApy) || 0,
+        borrowApy: Number(pos.market?.state?.borrowApy) || 0,
+        utilization: Number(pos.market?.state?.utilization) || 0,
+        loanDecimals: pos.market?.loanAsset?.decimals || 18,
+        colDecimals: pos.market?.collateralAsset?.decimals || 18,
+        loanPrice: 0, colPrice: 0, loanAddr: '', colAddr: '',
+        source: 'api',
       });
-      console.log(`Morpho [${networkName}] ${pos.market?.collateralAsset?.symbol||'?'}/${pos.market?.loanAsset?.symbol||'?'}: col=$${collateralUsd.toFixed(2)} borrow=$${borrowUsd.toFixed(2)} HF=${marketHF?.toFixed(3)||'∞'}`);
+      totalSupply += supplyUsd + collateralUsd;
+      totalBorrow += borrowUsd;
+      if (hf !== null && (minHF === null || hf < minHF)) minHF = hf;
     });
+  } catch(e) {
+    console.warn('[Morpho] API error:', e.message);
+  }
 
-    // ALSO fetch on-chain for known Base markets (API doesn't index Base reliably)
-    for (const chainKey of ['base', 'eth']) {
-      const knownMarkets = MORPHO_KNOWN_MARKETS[chainKey] || [];
-      for (const mkt of knownMarkets) {
-        // Skip if already in positions from API
-        if (positions.some(p => p.marketKey === mkt.id.slice(0, 10))) continue;
-        const onChainPos = await fetchMorphoOnChain(chainKey, walletAddr, mkt.id);
-        if (onChainPos) {
-          positions.push(onChainPos);
-          totalSupply += (onChainPos.supplyUsd + onChainPos.collateralUsd);
-          totalBorrow += onChainPos.borrowUsd;
-          if (onChainPos.hf !== null && (minHF === null || onChainPos.hf < minHF)) minHF = onChainPos.hf;
-        }
+  // STEP 2: On-chain fetch for each known market on each chain
+  // Auto-discover: also scan for marketIds via Alchemy logs
+  for (const chainKey of ['base', 'eth']) {
+    const morphoAddr = MORPHO_BLUE_CONTRACTS[chainKey];
+    if (!morphoAddr || !ALCHEMY_RPCS[chainKey]) continue;
+
+    // Combine known marketIds + auto-discovered ones
+    const knownIds = (MORPHO_KNOWN_MARKETS[chainKey] || []).map(m => m.id);
+    const userMarkets = (state.morphoUserMarkets?.[chainKey] || []);
+    const allIds = [...new Set([...knownIds, ...userMarkets])];
+
+    console.log(`[Morpho] On-chain ${chainKey}: checking ${allIds.length} markets`);
+
+    for (const marketId of allIds) {
+      // Skip if API already gave us this position
+      if (positions.some(p => p.marketIdFull?.toLowerCase() === marketId.toLowerCase())) continue;
+
+      const onChainPos = await fetchMorphoOnChain(chainKey, walletAddr, marketId);
+      if (onChainPos) {
+        positions.push(onChainPos);
+        totalSupply += onChainPos.supplyUsd + onChainPos.collateralUsd;
+        totalBorrow += onChainPos.borrowUsd;
+        if (onChainPos.hf !== null && (minHF === null || onChainPos.hf < minHF)) minHF = onChainPos.hf;
       }
     }
-
-    live.positions['morpho'] = {
-      hf:              minHF,
-      totalCollateral: totalSupply,
-      totalDebt:       totalBorrow,
-      available:       Math.max(0, totalSupply * 0.8 - totalBorrow),
-      ltv:             totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
-      positions,
-      source: 'morpho_api+onchain',
-    };
-    console.log(`Morpho total: locked=$${totalSupply.toFixed(2)} debt=$${totalBorrow.toFixed(2)} minHF=${minHF?.toFixed(3)||'—'} (${positions.length} markets)`);
-    // Re-render to show Morpho data
-    render();
-  } catch(e) {
-    console.warn('Morpho API failed:', e.message);
-    // Fallback: try Morpho subgraph
-    try {
-      const r2 = await fetch('https://api.thegraph.com/subgraphs/name/morpho-labs/morpho-blue-mainnet', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({query:`{positions(where:{user:"${walletAddr.toLowerCase()}",shares_gt:"0"}){shares market{id totalSupplyAssets totalBorrowAssets loanToken{symbol}}}}`}),
-        signal: AbortSignal.timeout(10000)
-      });
-    } catch(e2) {}
   }
-}
 
-function reapplyPricesToHistory() {
-  let updated = 0, missing = 0;
-  const missingSymbols = new Set();
-  Object.values(live.history).forEach(events => {
-    if (!Array.isArray(events)) return;
-    events.forEach(e => {
-      if ((e.amountUSD === 0 || !e.amountUSD) && e.amountCrypto > 0 && e.asset) {
-        // Try: cleaned asset, raw symbol, uppercase variants
-        const candidates = [e.asset, e.rawSymbol, e.asset?.toUpperCase()].filter(Boolean);
-        let price = 0;
-        for (const c of candidates) {
-          price = getUsdPrice(c);
-          if (price > 0) break;
-        }
-        if (price > 0) {
-          e.amountUSD = e.amountCrypto * price;
-          updated++;
-        } else {
-          missing++;
-          missingSymbols.add(e.asset);
-        }
-      }
-    });
-  });
-  if (updated > 0) console.log(`✓ Reapplied prices to ${updated} history events`);
-  if (missing > 0) console.log(`⚠ ${missing} events still without price. Missing symbols:`, Array.from(missingSymbols).join(', '));
+  if (positions.length === 0) {
+    console.log('[Morpho] No active positions found');
+    live.positions['morpho'] = null;
+    return;
+  }
+
+  live.positions['morpho'] = {
+    hf: minHF,
+    totalCollateral: totalSupply,
+    totalDebt: totalBorrow,
+    available: Math.max(0, totalSupply * 0.8 - totalBorrow),
+    ltv: totalSupply > 0 ? (totalBorrow / totalSupply) * 100 : 0,
+    positions,
+    source: 'api+onchain',
+  };
+  console.log(`[Morpho] Total: locked=$${totalSupply.toFixed(2)} debt=$${totalBorrow.toFixed(2)} HF=${minHF?.toFixed(3)||'∞'} (${positions.length} positions)`);
 }
 
 async function refreshAll() {
