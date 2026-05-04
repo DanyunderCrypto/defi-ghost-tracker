@@ -3201,7 +3201,7 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       return null;
     }
 
-    // 2. Call market(marketId) - returns (totalSupplyAssets, totalSupplyShares, totalBorrowAssets, totalBorrowShares, lastUpdate, fee)
+    // 2. Call market(marketId)
     const mktData = MORPHO_FN_MARKET + marketId.slice(2);
     const mktRes = await fetch(rpc, {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -3209,14 +3209,16 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       signal: AbortSignal.timeout(12000)
     });
     const mktJ = await mktRes.json();
-    if (!mktJ.result) return null;
+    if (mktJ.error) { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} market() error:`, mktJ.error.message); return null; }
+    if (!mktJ.result || mktJ.result === '0x') { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} market() empty`); return null; }
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: market() OK, len=${mktJ.result.length}`);
     const mktHex = mktJ.result.slice(2).padStart(384, '0');
     const totalSupplyAssets = BigInt('0x' + mktHex.slice(0, 64));
     const totalSupplyShares = BigInt('0x' + mktHex.slice(64, 128));
     const totalBorrowAssets = BigInt('0x' + mktHex.slice(128, 192));
     const totalBorrowShares = BigInt('0x' + mktHex.slice(192, 256));
 
-    // 3. Call idToMarketParams - returns (loanToken, collateralToken, oracle, irm, lltv)
+    // 3. Call idToMarketParams
     const paramsData = MORPHO_FN_ID_TO_PARAMS + marketId.slice(2);
     const paramsRes = await fetch(rpc, {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -3224,13 +3226,16 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       signal: AbortSignal.timeout(12000)
     });
     const paramsJ = await paramsRes.json();
-    if (!paramsJ.result) return null;
+    if (paramsJ.error) { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} idToMarketParams() error:`, paramsJ.error.message); return null; }
+    if (!paramsJ.result || paramsJ.result === '0x') { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} idToMarketParams() empty`); return null; }
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: idToMarketParams() OK, len=${paramsJ.result.length}`);
     const paramsHex = paramsJ.result.slice(2).padStart(320, '0');
     const loanToken = '0x' + paramsHex.slice(24, 64);
     const collateralToken = '0x' + paramsHex.slice(64+24, 128);
     const lltvRaw = BigInt('0x' + paramsHex.slice(256, 320));
     const lltv = Number(lltvRaw) / 1e18;
 
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: tokens loan=${loanToken} col=${collateralToken} lltv=${lltv}`);
     // 4. Get token info (symbol + decimals) via ERC20 calls
     const getTokenInfo = async (tokenAddr) => {
       try {
@@ -3255,6 +3260,7 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       } catch(e) { return { symbol: '?', decimals: 18 }; }
     };
     const [loanInfo, colInfo] = await Promise.all([getTokenInfo(loanToken), getTokenInfo(collateralToken)]);
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: loan=${loanInfo.symbol}(${loanInfo.decimals}) col=${colInfo.symbol}(${colInfo.decimals})`);
 
     // Convert shares to assets using market totals (Morpho's conversion formula)
     // assets = shares * totalAssets / totalShares (rounding down for borrow, up for supply)
@@ -3277,6 +3283,7 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
 
     console.log(`Morpho on-chain [${chainKey}] ${colInfo.symbol}/${loanInfo.symbol}: col=${colAmt} ($${collateralUsd.toFixed(2)}) borrow=${borrowAmt} ($${borrowUsd.toFixed(2)}) HF=${hf?.toFixed(3)||'∞'}`);
 
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: SUCCESS - returning position object`);
     return {
       marketKey: marketId.slice(0, 10),
       loanSym: loanInfo.symbol,
