@@ -648,9 +648,24 @@ const MORPHO_BLUE_CONTRACTS = {
 // Format: { chainKey: [{id: marketId, label: 'collateral/loan'}, ...] }
 const MORPHO_KNOWN_MARKETS = {
   base: [
-    { id: '0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836', label: 'cbBTC/USDC' },
-    { id: '0xdba352d93a64b17c71104cbddc6aef85cd432322a1446b5b65163cbbc671a556', label: 'cbBTC/USDC (2)' },
-    { id: '0x84662b4f95b85d6b082b68d32cf71bb7c4ed1ab08ae6d39c3a96d8f2a5c8aa14', label: 'WETH/USDC' },
+    { id: '0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836',
+      label: 'cbBTC/USDC',
+      // Fallback hardcoded info in case idToMarketParams reverts
+      loanToken: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC on Base
+      loanSym: 'USDC', loanDecimals: 6,
+      colToken: '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf', // cbBTC on Base
+      colSym: 'cbBTC', colDecimals: 8,
+      lltv: 0.86 },
+    { id: '0xdba352d93a64b17c71104cbddc6aef85cd432322a1446b5b65163cbbc671a556',
+      label: 'cbBTC/USDC (2)',
+      loanToken: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', loanSym: 'USDC', loanDecimals: 6,
+      colToken: '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf', colSym: 'cbBTC', colDecimals: 8,
+      lltv: 0.86 },
+    { id: '0x84662b4f95b85d6b082b68d32cf71bb7c4ed1ab08ae6d39c3a96d8f2a5c8aa14',
+      label: 'WETH/USDC',
+      loanToken: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', loanSym: 'USDC', loanDecimals: 6,
+      colToken: '0x4200000000000000000000000000000000000006', colSym: 'WETH', colDecimals: 18,
+      lltv: 0.86 },
   ],
   eth: [],
 };
@@ -660,8 +675,8 @@ const MORPHO_KNOWN_MARKETS = {
 const MORPHO_FN_POSITION = '0x93c52062';
 // market(bytes32) function selector  
 const MORPHO_FN_MARKET = '0x5c60e39a';
-// idToMarketParams(bytes32) function selector
-const MORPHO_FN_ID_TO_PARAMS = '0x521ce8b4';
+// idToMarketParams(bytes32) function selector - keccak256('idToMarketParams(bytes32)')[0:4]
+const MORPHO_FN_ID_TO_PARAMS = '0x861c0fb1';
 
 // Alchemy RPC base URLs per chain (requires API key)
 const ALCHEMY_RPCS = {
@@ -3218,7 +3233,10 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
     const totalBorrowAssets = BigInt('0x' + mktHex.slice(128, 192));
     const totalBorrowShares = BigInt('0x' + mktHex.slice(192, 256));
 
-    // 3. Call idToMarketParams
+    // 3. Call idToMarketParams - or use fallback hardcoded info
+    let loanToken, collateralToken, lltv;
+    const knownMarket = (MORPHO_KNOWN_MARKETS[chainKey]||[]).find(m => m.id.toLowerCase() === marketId.toLowerCase());
+
     const paramsData = MORPHO_FN_ID_TO_PARAMS + marketId.slice(2);
     const paramsRes = await fetch(rpc, {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -3226,15 +3244,23 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       signal: AbortSignal.timeout(12000)
     });
     const paramsJ = await paramsRes.json();
-    if (paramsJ.error) { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} idToMarketParams() error:`, paramsJ.error.message); return null; }
-    if (!paramsJ.result || paramsJ.result === '0x') { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} idToMarketParams() empty`); return null; }
-    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: idToMarketParams() OK, len=${paramsJ.result.length}`);
-    const paramsHex = paramsJ.result.slice(2).padStart(320, '0');
-    const loanToken = '0x' + paramsHex.slice(24, 64);
-    const collateralToken = '0x' + paramsHex.slice(64+24, 128);
-    const lltvRaw = BigInt('0x' + paramsHex.slice(256, 320));
-    const lltv = Number(lltvRaw) / 1e18;
 
+    if (paramsJ.result && paramsJ.result !== '0x') {
+      console.log(`[Morpho onChain] ${marketId.slice(0,12)}: idToMarketParams() OK`);
+      const paramsHex = paramsJ.result.slice(2).padStart(320, '0');
+      loanToken = '0x' + paramsHex.slice(24, 64);
+      collateralToken = '0x' + paramsHex.slice(64+24, 128);
+      const lltvRaw = BigInt('0x' + paramsHex.slice(256, 320));
+      lltv = Number(lltvRaw) / 1e18;
+    } else if (knownMarket) {
+      console.log(`[Morpho onChain] ${marketId.slice(0,12)}: idToMarketParams() failed, using fallback hardcoded info`);
+      loanToken = knownMarket.loanToken;
+      collateralToken = knownMarket.colToken;
+      lltv = knownMarket.lltv || 0.86;
+    } else {
+      console.warn(`[Morpho onChain] ${marketId.slice(0,12)}: idToMarketParams() failed and no fallback info`);
+      return null;
+    }
     console.log(`[Morpho onChain] ${marketId.slice(0,12)}: tokens loan=${loanToken} col=${collateralToken} lltv=${lltv}`);
     // 4. Get token info (symbol + decimals) via ERC20 calls
     const getTokenInfo = async (tokenAddr) => {
@@ -3259,7 +3285,14 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
         return { symbol, decimals };
       } catch(e) { return { symbol: '?', decimals: 18 }; }
     };
-    const [loanInfo, colInfo] = await Promise.all([getTokenInfo(loanToken), getTokenInfo(collateralToken)]);
+    let loanInfo, colInfo;
+    if (knownMarket) {
+      loanInfo = { symbol: knownMarket.loanSym, decimals: knownMarket.loanDecimals };
+      colInfo = { symbol: knownMarket.colSym, decimals: knownMarket.colDecimals };
+      console.log(`[Morpho onChain] ${marketId.slice(0,12)}: using known token info`);
+    } else {
+      [loanInfo, colInfo] = await Promise.all([getTokenInfo(loanToken), getTokenInfo(collateralToken)]);
+    }
     console.log(`[Morpho onChain] ${marketId.slice(0,12)}: loan=${loanInfo.symbol}(${loanInfo.decimals}) col=${colInfo.symbol}(${colInfo.decimals})`);
 
     // Convert shares to assets using market totals (Morpho's conversion formula)
