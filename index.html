@@ -3178,6 +3178,7 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
   if (!morphoAddr) return null;
 
   try {
+    console.log(`[Morpho onChain] ${chainKey} ${marketId.slice(0,12)}: starting...`);
     // 1. Call position(marketId, user) - returns (supplyShares, borrowShares, collateral)
     const posData = MORPHO_FN_POSITION + marketId.slice(2) + walletAddr.slice(2).toLowerCase().padStart(64, '0');
     const posRes = await fetch(rpc, {
@@ -3186,14 +3187,19 @@ async function fetchMorphoOnChain(chainKey, walletAddr, marketId) {
       signal: AbortSignal.timeout(12000)
     });
     const posJ = await posRes.json();
-    if (!posJ.result || posJ.result === '0x') return null;
+    if (posJ.error) { console.warn(`[Morpho onChain] ${marketId.slice(0,12)} position error:`, posJ.error.message); return null; }
+    if (!posJ.result || posJ.result === '0x') { console.log(`[Morpho onChain] ${marketId.slice(0,12)}: empty position result`); return null; }
     const posHex = posJ.result.slice(2).padStart(192, '0');
     const supplyShares = BigInt('0x' + posHex.slice(0, 64));
     const borrowShares = BigInt('0x' + posHex.slice(64, 128));
     const collateral = BigInt('0x' + posHex.slice(128, 192));
+    console.log(`[Morpho onChain] ${marketId.slice(0,12)}: supplyShares=${supplyShares} borrowShares=${borrowShares} collateral=${collateral}`);
 
     // Skip if position is empty
-    if (supplyShares === 0n && borrowShares === 0n && collateral === 0n) return null;
+    if (supplyShares === 0n && borrowShares === 0n && collateral === 0n) {
+      console.log(`[Morpho onChain] ${marketId.slice(0,12)}: empty position - user has no balance here`);
+      return null;
+    }
 
     // 2. Call market(marketId) - returns (totalSupplyAssets, totalSupplyShares, totalBorrowAssets, totalBorrowShares, lastUpdate, fee)
     const mktData = MORPHO_FN_MARKET + marketId.slice(2);
@@ -3411,6 +3417,36 @@ async function fetchMorphoPositions(walletAddr) {
     source: 'api+onchain',
   };
   console.log(`[Morpho] Total: locked=$${totalSupply.toFixed(2)} debt=$${totalBorrow.toFixed(2)} HF=${minHF?.toFixed(3)||'∞'} (${positions.length} positions)`);
+}
+
+// Re-apply prices to history events that have $0 USD
+// Called after history loads in case prices weren't ready when events were processed
+function reapplyPricesToHistory() {
+  if (!live.history) return;
+  let updated = 0, missing = 0;
+  const missingSymbols = new Set();
+  Object.values(live.history).forEach(events => {
+    if (!Array.isArray(events)) return;
+    events.forEach(e => {
+      if ((e.amountUSD === 0 || !e.amountUSD) && e.amountCrypto > 0 && e.asset) {
+        const candidates = [e.asset, e.rawSymbol, e.asset?.toUpperCase()].filter(Boolean);
+        let price = 0;
+        for (const c of candidates) {
+          price = getUsdPrice(c);
+          if (price > 0) break;
+        }
+        if (price > 0) {
+          e.amountUSD = e.amountCrypto * price;
+          updated++;
+        } else {
+          missing++;
+          missingSymbols.add(e.asset);
+        }
+      }
+    });
+  });
+  if (updated > 0) console.log(`✓ Reapplied prices to ${updated} history events`);
+  if (missing > 0) console.log(`⚠ ${missing} events still without price. Missing symbols:`, Array.from(missingSymbols).join(', '));
 }
 
 async function refreshAll() {
