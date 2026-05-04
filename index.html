@@ -1130,7 +1130,7 @@ async function testMorphoAPI() {
   lines.push('<span style="color:var(--muted)">Wallet: '+w.addr+'</span>');
 
   // Single query (Morpho returns positions across all chains by default)
-  const query = `{userByAddress(address:"${w.addr.toLowerCase()}"){address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
+  const query = `{userByAddress(address:"${w.addr.toLowerCase()}"){address marketPositions{state{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd}healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}`;
 
   let j = null;
   try {
@@ -1156,7 +1156,7 @@ async function testMorphoAPI() {
   if (positions.length === 0) {
     lines.push('<span style="color:var(--muted)">Query principal: 0. A tentar query alternativa users(items)...</span>');
     try {
-      const altQuery = `{users(where:{address_in:["${w.addr.toLowerCase()}"]}){items{address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}}`;
+      const altQuery = `{users(where:{address_in:["${w.addr.toLowerCase()}"]}){items{address marketPositions{state{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd}healthFactor market{uniqueKey loanAsset{symbol decimals}collateralAsset{symbol decimals}lltv morphoBlue{chain{id network}}}}}}}`;
       const r2 = await fetch('https://blue-api.morpho.org/graphql', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({query: altQuery}), signal: AbortSignal.timeout(20000)
@@ -1183,9 +1183,10 @@ async function testMorphoAPI() {
   try {
 
     positions.forEach((pos, i) => {
-      const col = pos.collateralUsd || 0;
-      const sup = pos.supplyAssetsUsd || 0;
-      const borrow = pos.borrowAssetsUsd || 0;
+      const ps = pos.state || {};
+      const col = ps.collateralUsd ?? pos.collateralUsd ?? 0;
+      const sup = ps.supplyAssetsUsd ?? pos.supplyAssetsUsd ?? 0;
+      const borrow = ps.borrowAssetsUsd ?? pos.borrowAssetsUsd ?? 0;
       const hf = pos.healthFactor;
       const colSym = pos.market?.collateralAsset?.symbol || '?';
       const loanSym = pos.market?.loanAsset?.symbol || '?';
@@ -3220,24 +3221,34 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
 async function fetchMorphoPositions(walletAddr) {
   if (!walletAddr) return;
   try {
-    // Morpho GraphQL API
-    // userByAddress returns positions across ALL chains by default
-    // Use first:1000 to bypass any default pagination limit
+    // Morpho GraphQL API - using NEW non-deprecated fields (state.*)
+    // Old fields will be removed 2026-05-20
     const query = `{
       userByAddress(address: "${walletAddr.toLowerCase()}") {
         address
         marketPositions {
-          supplyAssets supplyAssetsUsd
-          borrowAssets borrowAssetsUsd
-          collateral collateralUsd
+          state {
+            supplyAssets
+            supplyAssetsUsd
+            borrowAssets
+            borrowAssetsUsd
+            collateral
+            collateralUsd
+          }
           healthFactor
           market {
             uniqueKey
             loanAsset { symbol address decimals priceUsd }
             collateralAsset { symbol address decimals priceUsd }
             lltv
-            state { borrowApy supplyApy utilization }
-            morphoBlue { chain { id network } }
+            state {
+              borrowApy
+              supplyApy
+              utilization
+            }
+            morphoBlue {
+              chain { id network }
+            }
           }
         }
       }
@@ -3262,7 +3273,7 @@ async function fetchMorphoPositions(walletAddr) {
     if (!user?.marketPositions?.length) {
       console.log('Morpho first-pass returned 0, trying users(items) format...');
       try {
-        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
+        const altQuery = `{users(where:{address_in:["${walletAddr.toLowerCase()}"]}){items{address marketPositions{state{supplyAssets supplyAssetsUsd borrowAssets borrowAssetsUsd collateral collateralUsd}healthFactor market{uniqueKey loanAsset{symbol address decimals priceUsd}collateralAsset{symbol address decimals priceUsd}lltv state{borrowApy supplyApy utilization}morphoBlue{chain{id network}}}}}}}`;
         const r2 = await fetch('https://blue-api.morpho.org/graphql', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({query: altQuery}),
@@ -3282,13 +3293,18 @@ async function fetchMorphoPositions(walletAddr) {
     const positions = [];
     let minHF = null;
     user.marketPositions.forEach(pos => {
-      const supplyUsd     = pos.supplyAssetsUsd || 0;
-      const borrowUsd     = pos.borrowAssetsUsd || 0;
-      const collateralUsd = pos.collateralUsd || 0;
+      // NEW API: data is now in pos.state (with fallback to deprecated top-level fields)
+      const ps = pos.state || {};
+      const supplyUsd     = ps.supplyAssetsUsd ?? pos.supplyAssetsUsd ?? 0;
+      const borrowUsd     = ps.borrowAssetsUsd ?? pos.borrowAssetsUsd ?? 0;
+      const collateralUsd = ps.collateralUsd ?? pos.collateralUsd ?? 0;
+      const supplyAssetsRaw     = ps.supplyAssets ?? pos.supplyAssets ?? '0';
+      const borrowAssetsRaw     = ps.borrowAssets ?? pos.borrowAssets ?? '0';
+      const collateralAssetsRaw = ps.collateral ?? pos.collateral ?? '0';
+
       const hasActivity = supplyUsd > 0 || borrowUsd > 0 || collateralUsd > 0;
       if (!hasActivity) return;
 
-      // Per-market HF (use API value if available, else compute from LLTV)
       const lltv = pos.market?.lltv ? Number(pos.market.lltv) / 1e18 : 0.86;
       const computedHF = borrowUsd > 0 ? (collateralUsd * lltv) / borrowUsd : null;
       const marketHF = pos.healthFactor ? Number(pos.healthFactor) : computedHF;
@@ -3299,30 +3315,32 @@ async function fetchMorphoPositions(walletAddr) {
       totalSupply += colSideUsd;
       totalBorrow += borrowUsd;
 
-      // Compute per-market accrued interest (rate * borrow * time approximation)
       const borrowApy = pos.market?.state?.borrowApy ? Number(pos.market.state.borrowApy) : 0;
       const utilization = pos.market?.state?.utilization ? Number(pos.market.state.utilization) : 0;
       const chainId = pos.market?.morphoBlue?.chain?.id;
       const networkName = pos.market?.morphoBlue?.chain?.network ||
         (chainId === 1 ? 'ethereum' : chainId === 8453 ? 'base' : '?');
 
+      const loanDecimals = pos.market?.loanAsset?.decimals || 18;
+      const colDecimals = pos.market?.collateralAsset?.decimals || 18;
+
       positions.push({
-        marketKey:    pos.market?.uniqueKey?.slice(0,10) || '?',
+        marketKey:    pos.market?.uniqueKey?.slice(0,10) || pos.market?.marketId?.slice(0,10) || '?',
         loanSym:      pos.market?.loanAsset?.symbol || '?',
         loanAddr:     pos.market?.loanAsset?.address,
-        loanDecimals: pos.market?.loanAsset?.decimals || 18,
+        loanDecimals,
         loanPrice:    Number(pos.market?.loanAsset?.priceUsd) || 0,
         colSym:       pos.market?.collateralAsset?.symbol || '?',
         colAddr:      pos.market?.collateralAsset?.address,
-        colDecimals:  pos.market?.collateralAsset?.decimals || 18,
+        colDecimals,
         colPrice:     Number(pos.market?.collateralAsset?.priceUsd) || 0,
         chain:        networkName,
         lltv:         lltv * 100,
-        supplyAmt:    Number(pos.supplyAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
+        supplyAmt:    Number(supplyAssetsRaw) / Math.pow(10, loanDecimals),
         supplyUsd,
-        colAmt:       Number(pos.collateral) / Math.pow(10, pos.market?.collateralAsset?.decimals||18),
+        colAmt:       Number(collateralAssetsRaw) / Math.pow(10, colDecimals),
         collateralUsd,
-        borrowAmt:    Number(pos.borrowAssets) / Math.pow(10, pos.market?.loanAsset?.decimals||18),
+        borrowAmt:    Number(borrowAssetsRaw) / Math.pow(10, loanDecimals),
         borrowUsd,
         hf:           marketHF,
         supplyApy:    pos.market?.state?.supplyApy ? Number(pos.market.state.supplyApy) : 0,
