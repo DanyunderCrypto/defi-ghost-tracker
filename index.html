@@ -3783,9 +3783,43 @@ function processFile(file) {
     const reader = new FileReader();
     reader.onload = (e)=>{
       const wb = XLSX.read(new Uint8Array(e.target.result),{type:'array'});
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(ws,{defval:''});
-      handleParsed(data, file.name, Object.keys(data[0]||{}));
+      // Smart header detection: scan first 20 rows for one containing keywords like amount/date/timestamp
+      // Many exported XLSX files have summary rows before the actual table
+      const HEADER_KEYWORDS = ['amount','date','timestamp','description','valor','data'];
+      let bestSheet = null, bestStartRow = 0;
+      // Try each sheet, prefer ones with clear headers
+      for (const name of wb.SheetNames) {
+        const ws = wb.Sheets[name];
+        const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:''}); // 2D array
+        let foundRow = -1;
+        for (let i = 0; i < Math.min(20, aoa.length); i++) {
+          const row = aoa[i] || [];
+          const lower = row.map(c => String(c||'').toLowerCase());
+          const hits = HEADER_KEYWORDS.filter(k => lower.some(c => c.includes(k))).length;
+          if (hits >= 2) { foundRow = i; break; }
+        }
+        if (foundRow >= 0) {
+          bestSheet = ws; bestStartRow = foundRow; 
+          console.log(`[Import] Detected header at row ${foundRow+1} of sheet "${name}"`);
+          break;
+        }
+      }
+      // Fallback: first sheet, no offset
+      if (!bestSheet) {
+        bestSheet = wb.Sheets[wb.SheetNames[0]];
+        bestStartRow = 0;
+      }
+      // Re-parse using the detected header row
+      const aoa = XLSX.utils.sheet_to_json(bestSheet, {header:1, defval:''});
+      const headerRow = aoa[bestStartRow] || [];
+      const dataRows = aoa.slice(bestStartRow + 1).filter(r => r.some(c => c !== '' && c != null));
+      const data = dataRows.map(row => {
+        const obj = {};
+        headerRow.forEach((h, idx) => { if (h) obj[String(h)] = row[idx]; });
+        return obj;
+      });
+      console.log(`[Import] Parsed ${data.length} rows. Columns:`, headerRow);
+      handleParsed(data, file.name, headerRow.filter(h => h));
     };
     reader.readAsArrayBuffer(file);
   } else { toast('Formato não suportado. Usa CSV, XLSX ou XLS.','warn'); }
@@ -3814,7 +3848,7 @@ function handleParsed(rows, filename, cols) {
 function detectColumns(cols, fmt) {
   const lc = cols.map(c=>c.toLowerCase());
   const find = (...keys)=>{ for(const k of keys){ const i=lc.findIndex(c=>c.includes(k)||c===k); if(i>=0)return cols[i]; } return null; };
-  if (fmt==='etherfi')   return { date:find('date','data'),     amount:find('amount','valor'),        desc:find('description','merchant','desc'), cashback:find('cashback') };
+  if (fmt==='etherfi')   return { date:find('timestamp','date','data'), amount:find('amount','valor'),        desc:find('description','merchant','desc'), cashback:find('cashback earned','cashback'), currency:find('currency'), category:find('category') };
   if (fmt==='metamask')  return { date:find('date'),            amount:find('token amount','amount'), desc:find('description','action'),         cashback:null };
   if (fmt==='gnosis')    return { date:find('date'),            amount:find('amount eur','amount'),   desc:find('merchant','description'),        cashback:find('cashback') };
   if (fmt==='kast')      return { date:find('date'),            amount:find('amount'),                desc:find('description','merchant'),        cashback:find('cashback') };
