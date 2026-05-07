@@ -2958,7 +2958,24 @@ async function fetchHistory(chainKey, walletAddr, apiKey) {
         if (isDebtToken(sym) && toUser && fromZero) type = 'borrow';
         if (isDebtToken(sym) && fromUser && toZero) type = 'repay';
         if (type) {
-          const cleanAsset = sym.replace(/^a(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/i,'').replace(/^(variable|stable)Debt.*/i,'DEBT').replace(/^a/,'') || sym;
+          // Extract underlying token symbol
+          // aTokens: aBasUSDC → USDC, aEthUSDC → USDC, BUSDC → USDC, etc.
+          // debt tokens: variableDebtBasUSDC → USDC, etc.
+          let cleanAsset = sym;
+          // Handle Alchemy's shortened names like "BUSDC" (= aBasUSDC), "BWETH" etc
+          if (/^B[A-Z]/.test(sym) && sym !== 'BTC') {
+            // Likely Alchemy shortname for aBase token (BUSDC, BWETH, BcbETH...)
+            cleanAsset = sym.slice(1); // strip leading B
+          } else if (sym.startsWith('variableDebt') || sym.startsWith('stableDebt')) {
+            // variableDebtBasUSDC → BasUSDC → USDC
+            cleanAsset = sym.replace(/^(variable|stable)Debt/, '');
+            cleanAsset = cleanAsset.replace(/^(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/, '');
+          } else if (/^a[A-Z]/.test(sym)) {
+            // aBasUSDC → USDC
+            cleanAsset = sym.slice(1).replace(/^(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/, '');
+          }
+          // Final fallback - if nothing matched, use the original
+          if (!cleanAsset) cleanAsset = sym;
           const price = getUsdPrice(cleanAsset) || getUsdPrice(sym);
           const cryptoAmt = tx.value || 0;
           events.push({
