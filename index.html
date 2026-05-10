@@ -578,6 +578,7 @@ td.muted  { color:var(--muted); }
       </div>
     </div>
     <div id="txFetchStatus" style="margin-bottom:0.75rem"></div>
+    <div id="lotSuggestions" style="margin-bottom:1rem;padding:0.75rem;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid rgba(247,181,0,0.15)"></div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Data Aquisição *</label><input class="form-input" id="col_acq" type="date"></div>
       <div class="form-group"><label class="form-label">Data Depósito</label><input class="form-input" id="col_dep" type="date"></div>
@@ -1099,6 +1100,16 @@ let interestTimer = null;
 // STORAGE
 // ══════════════════════════════════════════════════════════
 async function loadState() {
+  // C2: Schema versioning
+  const SCHEMA_VERSION = 3;
+  // Migrations applied in order. Each gets the state and returns migrated state.
+  const MIGRATIONS = {
+    1: (s) => { s.imports = s.imports || []; return s; },
+    2: (s) => { s.cards = s.cards || []; return s; },
+    3: (s) => { s.morphoUserMarkets = s.morphoUserMarkets || {}; return s; },
+  };
+  // Will run after state is loaded below
+
   try {
     // Try v2 key first
     let raw = localStorage.getItem('ghost2_state');
@@ -1124,9 +1135,43 @@ async function loadState() {
         } catch(e) { console.warn('v1 migration failed:', e); }
       }
     }
-    if (raw) { const p = JSON.parse(raw); Object.assign(state, p); }
+    if (raw) { const p = JSON.parse(raw); Object.assign(state, p);
+  // Run pending migrations
+  const fromVer = state._schemaVersion || 1;
+  if (fromVer < SCHEMA_VERSION) {
+    console.log(`[Migration] State at v${fromVer}, migrating to v${SCHEMA_VERSION}`);
+    for (let v = fromVer + 1; v <= SCHEMA_VERSION; v++) {
+      if (MIGRATIONS[v]) {
+        try { state = MIGRATIONS[v](state); console.log(`[Migration] v${v} applied`); }
+        catch(e) { console.warn(`[Migration] v${v} failed:`, e.message); }
+      }
+    }
+    state._schemaVersion = SCHEMA_VERSION;
+  }
+ }
   } catch(e) { console.warn('Load error:', e); }
   boot();
+  // C1: Restore live cache (positions, history, prices) from localStorage
+  try {
+    const cacheRaw = localStorage.getItem('defiGhostLiveCache_v1');
+    if (cacheRaw) {
+      const cache = JSON.parse(cacheRaw);
+      const ageMin = (Date.now() - (cache.timestamp || 0)) / 60000;
+      // Use cache if less than 30 min old
+      if (ageMin < 30 && cache.data) {
+        if (cache.data.positions) live.positions = cache.data.positions;
+        if (cache.data.history) live.history = cache.data.history;
+        if (cache.data.prices) live.prices = cache.data.prices;
+        if (cache.data.eurRate) live.eurRate = cache.data.eurRate;
+        live.cacheAgeMin = Math.floor(ageMin);
+        console.log(`[Cache] Restored live state from cache (${Math.floor(ageMin)} min old)`);
+      } else {
+        console.log(`[Cache] Cache too old (${Math.floor(ageMin)} min) — discarded`);
+      }
+    }
+  } catch(e) {
+    console.warn('[Cache] Failed to restore:', e.message);
+  }
 }
 
 function saveState() {
@@ -1651,6 +1696,21 @@ function renderDashboard(w) {
 
   return `
     ${alertHTML}
+    ${(()=>{
+      const sugs = getLotSuggestions();
+      if (sugs.length === 0) return '';
+      const totalUsd = sugs.reduce((s,x)=>s+(x.amountUSD||0),0);
+      return `<div class="alert" style="background:rgba(247,181,0,0.08);border:1px solid rgba(247,181,0,0.3);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem">
+        <div style="display:flex;align-items:center;gap:0.75rem">
+          <span style="font-size:1.2rem">🤖</span>
+          <div>
+            <div style="font-weight:600">${sugs.length} ${sugs.length===1?'supply detectado':'supplies detectados'} sem lote</div>
+            <div style="font-size:0.72rem;color:var(--muted)">Valor total: $${fmt(totalUsd)} · regista para tirar partido da regra dos 365 dias</div>
+          </div>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="showTab('strategy');setTimeout(()=>{openModal('modalCollateral');renderLotSuggestions();},150)">→ Registar lotes</button>
+      </div>`;
+    })()}
     <div class="stats-grid" style="margin:1rem 0">
       <div class="stat"><div class="stat-label">Health Factor Min.</div><div class="stat-value" style="color:${hfColor}">${minHF!==null?minHF.toFixed(3):'—'}</div><div class="stat-sub">pior entre redes</div></div>
       <div class="stat"><div class="stat-label">Colateral Total</div><div class="stat-value sv-gold">$${fmt(totalCol)}</div><div class="stat-sub">≈ €${fmt(totalCol*live.eurRate)} · ${protoEntries.length} posições</div></div>
@@ -1686,7 +1746,7 @@ function renderDashboard(w) {
       <div class="panel-body no-pad"><div class="table-wrap">${renderRecentHistory()}</div></div>
     </div>
 
-    ${live.lastRefresh?`<div style="text-align:right;font-family:var(--mono);font-size:0.6rem;color:var(--muted)">Refresh: ${live.lastRefresh} · USD/EUR: ${live.eurRate}</div>`:''}
+    ${live.lastRefresh?`<div style="text-align:right;font-family:var(--mono);font-size:0.6rem;color:var(--muted)">Refresh: ${live.lastRefresh} · USD/EUR: ${live.eurRate}${live.cacheAgeMin>0?` · cache: ${live.cacheAgeMin}min`:''}</div>`:''}
   `;
 }
 
@@ -2371,6 +2431,115 @@ function renderCardVisual(card) {
 // ══════════════════════════════════════════════════════════
 // STRATEGY 365 DAYS TAB
 // ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// B1: SUGGESTIONS — detect supplies in live.history not yet registered as lots
+// ══════════════════════════════════════════════════════════
+function getLotSuggestions() {
+  const w = activeWallet();
+  if (!w) return [];
+  const existingHashes = new Set(
+    state.collateral
+      .filter(c => c.walletId === w.id && c.txhash)
+      .map(c => c.txhash.toLowerCase())
+  );
+  const suggestions = [];
+  Object.entries(live.history || {}).forEach(([chain, events]) => {
+    if (!Array.isArray(events)) return;
+    events.forEach(e => {
+      // Only supplies (real lots) — not borrows/repays/withdraws
+      const isSupply = e.type === 'supply' || e.type === 'morpho_supply';
+      if (!isSupply) return;
+      // Skip if already has a lot for this txhash
+      if (e.txhash && existingHashes.has(e.txhash.toLowerCase())) return;
+      // Skip if zero value
+      if (!e.amountUSD || e.amountUSD < 1) return;
+      suggestions.push({
+        chain,
+        proto: e.proto || 'aave',
+        timestamp: e.timestamp,
+        date: e.timestamp ? new Date(e.timestamp * 1000).toISOString().split('T')[0] : '',
+        asset: e.asset || '?',
+        amountCrypto: e.amountCrypto || 0,
+        amountUSD: e.amountUSD || 0,
+        txhash: e.txhash || '',
+      });
+    });
+  });
+  // Sort newest first
+  suggestions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  return suggestions;
+}
+
+function renderLotSuggestions() {
+  const sugs = getLotSuggestions();
+  const el = document.getElementById('lotSuggestions');
+  if (!el) return;
+  if (sugs.length === 0) {
+    el.innerHTML = '<div style="font-size:0.78rem;color:var(--muted);padding:0.5rem 0">Sem sugestões automáticas. Adiciona um TX hash manualmente acima ou faz refresh para detectar novas transações.</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--gold);margin-bottom:0.5rem">
+      🤖 ${sugs.length} supply${sugs.length>1?'s':''} detectado${sugs.length>1?'s':''} (não registado${sugs.length>1?'s':''} como lote)
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.5rem;max-height:280px;overflow-y:auto">
+      ${sugs.slice(0, 20).map((s, i) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.6rem 0.75rem;background:rgba(247,181,0,0.05);border:1px solid rgba(247,181,0,0.2);border-radius:6px;font-size:0.78rem">
+          <div style="flex:1">
+            <div><span class="chain-dot" style="background:${CHAINS[s.chain]?.color||'#888'}"></span> <strong>${s.asset}</strong> · ${s.amountCrypto.toFixed(4)} <span style="color:var(--muted)">($${s.amountUSD.toFixed(2)})</span></div>
+            <div style="font-family:var(--mono);font-size:0.65rem;color:var(--muted);margin-top:0.2rem">
+              ${s.date} · ${CHAINS[s.chain]?.name||s.chain} · ${s.proto==='morpho'?'Morpho':'AAVE V3'} · ${s.txhash?s.txhash.slice(0,10)+'…':'sem hash'}
+            </div>
+          </div>
+          <button class="btn btn-gold btn-xs" onclick="useSuggestion(${i})">+ Usar</button>
+        </div>
+      `).join('')}
+    </div>`;
+  // Store for useSuggestion
+  window._lotSuggestions = sugs;
+}
+
+function useSuggestion(idx) {
+  const s = window._lotSuggestions?.[idx];
+  if (!s) return;
+  // Fill form fields
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el || val == null) return;
+    el.value = val;
+    el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', {bubbles: true}));
+  };
+  setVal('col_txhash', s.txhash);
+  setVal('col_acq', s.date);
+  setVal('col_dep', s.date);
+  setVal('col_chain', s.chain);
+  setVal('col_proto', s.proto);
+  // Asset: try to select if exists, else add
+  const assetSel = document.getElementById('col_asset');
+  if (assetSel && s.asset) {
+    const opts = [...assetSel.options];
+    const found = opts.find(o => o.value === s.asset || o.textContent === s.asset);
+    if (found) {
+      assetSel.value = found.value;
+    } else {
+      const opt = document.createElement('option');
+      opt.value = s.asset; opt.textContent = s.asset; opt.selected = true;
+      assetSel.appendChild(opt);
+    }
+    assetSel.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  setVal('col_qty', s.amountCrypto.toFixed(8));
+  setVal('col_eur', (s.amountUSD * (live.eurRate || 0.92)).toFixed(2));
+  if (s.amountCrypto > 0) {
+    const pricePerUnit = (s.amountUSD / s.amountCrypto) * (live.eurRate || 0.92);
+    setVal('col_price', pricePerUnit.toFixed(2));
+  }
+  // Visually highlight
+  toast('✓ Sugestão aplicada — confirma os campos antes de gravar', 'success');
+  // Scroll to the form fields
+  document.getElementById('col_acq')?.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
 function renderStrategy(w) {
   const cols = state.collateral.filter(c=>c.walletId===w.id).sort((a,b)=>a.acqDate.localeCompare(b.acqDate));
   const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365);
@@ -2381,7 +2550,7 @@ function renderStrategy(w) {
   return `
     <div class="section-row">
       <div class="section-label">Estratégia Fiscal 365 Dias — FIFO Portugal</div>
-      <button class="btn btn-gold btn-sm" onclick="openModal('modalCollateral');document.getElementById('col_dep').value=new Date().toISOString().split('T')[0]">+ Adicionar Lote</button>
+      <button class="btn btn-gold btn-sm" onclick="openModal('modalCollateral');document.getElementById('col_dep').value=new Date().toISOString().split('T')[0];renderLotSuggestions()">+ Adicionar Lote</button>
     </div>
 
     <div class="alert alert-info" style="margin-bottom:1.3rem">
@@ -3641,6 +3810,23 @@ async function refreshAll() {
   checkAlerts(w);
   if (btn) { btn.textContent='↻'; btn.disabled=false; }
   render();
+  // C1: Save live state to cache for next reload
+  try {
+    const cache = {
+      timestamp: Date.now(),
+      data: {
+        positions: live.positions,
+        history: live.history,
+        prices: live.prices,
+        eurRate: live.eurRate,
+      }
+    };
+    localStorage.setItem('defiGhostLiveCache_v1', JSON.stringify(cache));
+    live.cacheAgeMin = 0;
+    console.log('[Cache] Live state saved');
+  } catch(e) {
+    console.warn('[Cache] Failed to save:', e.message);
+  }
 }
 
 // ══════════════════════════════════════════════════════════
