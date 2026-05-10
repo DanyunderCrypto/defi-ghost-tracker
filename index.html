@@ -1493,15 +1493,40 @@ async function fetchEurRate() {
 
 function getUsdPrice(asset) {
   if (!asset) return 0;
-  // Strip variableDebt/stableDebt and aToken prefixes
-  let sym = asset.replace(/^(variable|stable)Debt/i,'').replace(/^a/,'');
-  // Try direct match (case-insensitive)
-  if (live.prices[sym]) return live.prices[sym];
-  // Try uppercase
-  const up = sym.toUpperCase();
-  if (live.prices[up]) return live.prices[up];
-  // Try original name (in case it's a special case like 'apxUSD' or 'apyUSD')
+  // Try original first (handles special cases like apxUSD, apyUSD that come from Morpho API)
   if (live.prices[asset]) return live.prices[asset];
+
+  // Build candidate stripped symbols
+  const candidates = new Set();
+  const CHAIN_PREFIXES = /(Bas|Base|Eth|Arb|Opt|Pol|Scr|Gno|Lin)/;
+
+  // 1. Strip variableDebt/stableDebt prefix
+  let s = asset.replace(/^(variable|stable)Debt/i, '');
+  candidates.add(s);
+
+  // 2. Strip chain prefix after stripping debt
+  candidates.add(s.replace(new RegExp('^' + CHAIN_PREFIXES.source), ''));
+
+  // 3. Strip leading "a" (aToken)
+  if (asset.startsWith('a') && asset.length > 1 && /[A-Z]/.test(asset[1])) {
+    const noA = asset.slice(1);
+    candidates.add(noA);
+    candidates.add(noA.replace(new RegExp('^' + CHAIN_PREFIXES.source), ''));
+  }
+
+  // 4. Strip leading "B" (Alchemy shortname for aBase: BUSDC, BWETH, BcbETH)
+  if (asset.startsWith('B') && asset.length > 1 && /[A-Z]/.test(asset[1]) && asset !== 'BTC' && asset !== 'BNB' && asset !== 'BAL') {
+    candidates.add(asset.slice(1));
+  }
+
+  // Try each candidate (and its uppercase variant)
+  for (const c of candidates) {
+    if (!c) continue;
+    if (live.prices[c]) return live.prices[c];
+    const up = c.toUpperCase();
+    if (live.prices[up]) return live.prices[up];
+  }
+
   return 0;
 }
 
