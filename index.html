@@ -3790,18 +3790,31 @@ async function autoFillTxHash() {
   if (date) {
     const acq = document.getElementById('col_acq');
     const dep = document.getElementById('col_dep');
-    if (acq && !acq.value) acq.value = date;
-    if (dep && !dep.value) dep.value = date;
+    if (acq) { acq.value = date; acq.dispatchEvent(new Event('change',{bubbles:true})); }
+    if (dep) { dep.value = date; dep.dispatchEvent(new Event('change',{bubbles:true})); }
   }
   const chainSel = document.getElementById('col_chain');
-  if (chainSel) chainSel.value = found.chain;
+  if (chainSel) {
+    chainSel.value = found.chain;
+    chainSel.dispatchEvent(new Event('change',{bubbles:true}));
+  }
 
   // Auto-detect protocol from `to` address
   const toAddr = found.tx.to?.toLowerCase();
-  let protoLabel = '';
+  let protoLabel = '', protoValue = '';
   if (toAddr) {
-    if (toAddr === '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb') protoLabel = 'Morpho Blue';
-    else if (CHAINS[found.chain]?.aavePool?.toLowerCase() === toAddr) protoLabel = 'AAVE V3';
+    if (toAddr === '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb') {
+      protoLabel = 'Morpho Blue'; protoValue = 'morpho';
+    } else if (CHAINS[found.chain]?.aavePool?.toLowerCase() === toAddr) {
+      protoLabel = 'AAVE V3'; protoValue = 'aave';
+    }
+  }
+  if (protoValue) {
+    const protoSel = document.getElementById('col_proto');
+    if (protoSel) {
+      protoSel.value = protoValue;
+      protoSel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
   }
 
   let valueInfo = '';
@@ -3815,6 +3828,7 @@ async function autoFillTxHash() {
 
   const blockNum = found.tx.blockNumber ? parseInt(found.tx.blockNumber, 16) : '?';
   if (status) status.innerHTML = `<div class="alert alert-success" style="font-size:0.78rem"><span>✓</span> TX encontrada em <strong>${CHAINS[found.chain]?.name}</strong> (bloco ${blockNum}) · Data: <strong>${fmtDate ? fmtDate(date) : date}</strong>${valueInfo}${protoLabel ? ' · ' + protoLabel : ''}<br>Confirma os restantes campos antes de gravar.</div>`;
+  console.log('[autoFillTxHash] Filled:', { date, chain: found.chain, protocol: protoValue });
   toast('TX encontrada — campos preenchidos ✓', 'success');
 }
 
