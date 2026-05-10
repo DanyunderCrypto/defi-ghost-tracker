@@ -3828,8 +3828,59 @@ async function autoFillTxHash() {
 
   const blockNum = found.tx.blockNumber ? parseInt(found.tx.blockNumber, 16) : '?';
   if (status) status.innerHTML = `<div class="alert alert-success" style="font-size:0.78rem"><span>✓</span> TX encontrada em <strong>${CHAINS[found.chain]?.name}</strong> (bloco ${blockNum}) · Data: <strong>${fmtDate ? fmtDate(date) : date}</strong>${valueInfo}${protoLabel ? ' · ' + protoLabel : ''}<br>Confirma os restantes campos antes de gravar.</div>`;
-  console.log('[autoFillTxHash] Filled:', { date, chain: found.chain, protocol: protoValue });
-  toast('TX encontrada — campos preenchidos ✓', 'success');
+  // Cross-reference live.history to fill asset/quantity/value if available
+  const matchingEvent = (live.history?.[found.chain] || []).find(e => e.txhash?.toLowerCase() === hash.toLowerCase());
+  let extraInfo = '';
+  if (matchingEvent) {
+    const assetSel = document.getElementById('col_asset');
+    const qtyInp = document.getElementById('col_qty');
+    const eurInp = document.getElementById('col_eur');
+    const priceInp = document.getElementById('col_price');
+
+    const cleanAsset = matchingEvent.asset || '';
+    if (cleanAsset && assetSel) {
+      // Try to select existing option, else add Outro
+      const optionExists = [...assetSel.options].some(o => o.value === cleanAsset || o.textContent === cleanAsset);
+      if (optionExists) {
+        assetSel.value = cleanAsset;
+      } else {
+        // Add a new option
+        const opt = document.createElement('option');
+        opt.value = cleanAsset; opt.textContent = cleanAsset; opt.selected = true;
+        assetSel.appendChild(opt);
+      }
+      assetSel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    if (qtyInp && matchingEvent.amountCrypto) {
+      qtyInp.value = matchingEvent.amountCrypto;
+      qtyInp.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+    if (eurInp && matchingEvent.amountUSD) {
+      const eurValue = matchingEvent.amountUSD * (live.eurRate || 0.92);
+      eurInp.value = eurValue.toFixed(2);
+      eurInp.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+    if (priceInp && matchingEvent.amountCrypto > 0 && matchingEvent.amountUSD > 0) {
+      const pricePerUnit = (matchingEvent.amountUSD / matchingEvent.amountCrypto) * (live.eurRate || 0.92);
+      priceInp.value = pricePerUnit.toFixed(2);
+      priceInp.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+    extraInfo = ` · Ativo: <strong>${cleanAsset}</strong> · Quantidade: ${matchingEvent.amountCrypto?.toFixed(6) || '—'}`;
+    console.log('[autoFillTxHash] Cross-reference found in live.history:', matchingEvent);
+  } else {
+    console.log('[autoFillTxHash] No matching event in live.history — preenche Ativo/Quantidade manualmente');
+  }
+
+  // Update the success message to include cross-ref info
+  if (status) {
+    const oldHtml = status.innerHTML;
+    if (extraInfo) {
+      status.innerHTML = oldHtml.replace('Confirma os restantes campos antes de gravar.', `Asset/Qty preenchidos do histórico.${extraInfo}<br>Confirma antes de gravar.`);
+    }
+  }
+
+  console.log('[autoFillTxHash] Filled:', { date, chain: found.chain, protocol: protoValue, asset: matchingEvent?.asset, qty: matchingEvent?.amountCrypto });
+  toast(matchingEvent ? 'TX encontrada + ativo/qty preenchidos ✓' : 'TX encontrada — preenche ativo/qty manualmente', 'success');
 }
 
 // ══════════════════════════════════════════════════════════
