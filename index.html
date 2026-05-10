@@ -2759,24 +2759,34 @@ function renderFiscal(w) {
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span class="panel-title">Transações AAVE para Declaração</span></div>
+      <div class="panel-head"><span class="panel-title">Transações DeFi para Declaração</span></div>
       <div class="panel-body no-pad"><div class="table-wrap">
         <div style="padding:0.75rem 1rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
           <span style="font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em;color:var(--muted);text-transform:uppercase">Filtro:</span>
           <button class="btn btn-sm ${showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(true)">📂 Apenas posições em aberto (${allHist.length})</button>
           <button class="btn btn-sm ${!showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(false)">📚 Todas (${allHistRaw.length})</button>
         </div>
-        ${allHist.length?`<table><thead><tr><th>Data</th><th>Rede</th><th>Protocolo</th><th>Tipo</th><th>Ativo</th><th>USD</th><th>Categoria</th><th>TX</th></tr></thead><tbody>
-          ${allHist.slice(0,50).map(e=>`<tr>
+        ${allHist.length?`<table><thead><tr><th>Data</th><th>Rede</th><th>Protocolo</th><th>Tipo</th><th>Ativo</th><th style="text-align:right">USD</th><th style="text-align:right">EUR</th><th>Categoria</th><th>TX</th></tr></thead><tbody>
+          ${allHist.slice(0,50).map(e=>{
+            // Compute USD/EUR live from current prices (may have improved since event creation)
+            const liveP = getUsdPrice(e.asset) || getUsdPrice(e.rawSymbol) || 0;
+            const usd = (liveP > 0 && e.amountCrypto > 0) ? (e.amountCrypto * liveP) : (e.amountUSD || 0);
+            const eur = usd * (live.eurRate || 0.92);
+            const protoLabel = e.proto==='morpho'?'Morpho':'AAVE V3';
+            const protoColor = e.proto==='morpho'?'#1C55FE':'#B6509E';
+            const typeColor = e.type?.includes('supply')||e.type==='withdraw'?'var(--green)':e.type?.includes('borrow')?'var(--amber)':'var(--blue)';
+            const typeLabel = (e.type||'—').replace('morpho_','').toUpperCase();
+            return `<tr>
             <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleDateString('pt-PT'):'—'}</td>
             <td>${CHAINS[e.chain]?.name||'—'}</td>
-            <td><span style="color:${e.proto==='morpho'?'#1C55FE':'#B6509E'};font-size:0.75rem">${e.proto==='morpho'?'Morpho':'AAVE V3'}</span></td>
-            <td style="color:${e.type==='supply'?'var(--green)':e.type==='borrow'?'var(--amber)':'var(--blue)'}font-weight:600">${(e.type||'—').toUpperCase()}</td>
-            <td style="font-weight:600">${e.asset||'—'}</td>
-            <td class="mono gold">$${fmt(e.amountUSD||0)}</td>
+            <td><span style="color:${protoColor};font-size:0.75rem;font-weight:600">${protoLabel}</span></td>
+            <td style="color:${typeColor};font-weight:600">${typeLabel}</td>
+            <td style="font-weight:600">${e.asset||'—'}<br><span style="font-family:var(--mono);font-size:0.62rem;color:var(--muted)">${(e.amountCrypto||0).toFixed(4)}</span></td>
+            <td class="mono gold" style="text-align:right">$${fmt(usd)}</td>
+            <td class="mono blue" style="text-align:right">€${fmt(eur)}</td>
             <td><span class="badge ${e.type==='supply'||e.type==='withdraw'?'badge-gold':'badge-muted'}" style="font-size:0.56rem">${e.type==='supply'||e.type==='withdraw'?'Cat. G':'Colateral'}</span></td>
             <td class="txhash">${e.txhash?`<a href="${CHAINS[e.chain]?.explorer}/tx/${e.txhash}" target="_blank">${truncTx(e.txhash)}</a>`:'—'}</td>
-          </tr>`).join('')}
+          </tr>`}).join('')}
         </tbody></table>`:
         `<div class="empty"><span class="empty-icon">📋</span><p style="font-size:0.85rem">Sem histórico. Adiciona uma Etherscan API Key para activar.</p></div>`}
       </div></div>
