@@ -557,7 +557,8 @@ td.muted  { color:var(--muted); }
     <div id="importPreview" style="margin-top:1rem"></div>
   </div>
   <div class="modal-foot">
-    <button class="btn btn-gold" id="importSaveBtn" onclick="saveImport()" style="display:none">Importar Transações</button>
+    <button class="btn btn-outline" id="importPreviewBtn" onclick="previewImport()" style="display:none">👁 Pré-visualizar</button>
+    <button class="btn btn-gold" id="importSaveBtn" onclick="saveImport()" style="display:none">✓ Importar Transações</button>
     <button class="btn btn-ghost" onclick="closeModal('modalImport')">Cancelar</button>
   </div>
 </div>
@@ -3734,44 +3735,87 @@ async function sendTelegram(w, msg) {
 // ══════════════════════════════════════════════════════════
 async function autoFillTxHash() {
   const hash = document.getElementById('col_txhash')?.value?.trim();
-  if (!hash?.startsWith('0x')||hash.length!==66) return;
   const status = document.getElementById('txFetchStatus');
   const btn = document.getElementById('txFetchBtn');
-  if (status) status.innerHTML = `<div class="loader"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></div> <span style="font-size:0.8rem;color:var(--muted)">A buscar dados on-chain...</span>`;
-  if (btn) { btn.disabled=true; btn.textContent='...'; }
+  if (!hash?.startsWith('0x') || hash.length !== 66) {
+    if (status) status.innerHTML = '<div class="alert alert-warn" style="font-size:0.78rem"><span>⚠</span> Hash inválido. Deve começar por 0x e ter 66 caracteres.</div>';
+    return;
+  }
+  if (status) status.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem"><div class="loader"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></div><span style="font-size:0.8rem;color:var(--muted)">A pesquisar em paralelo: ETH, Base, Arbitrum, Optimism, Polygon, Linea, Scroll...</span></div>';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ A buscar...'; }
+
   const w = activeWallet();
-  // Try all EVM chains
-  const chains = ['eth','base','arbitrum','optimism','polygon','scroll','gnosis','linea'];
-  let found = null;
-  for (const chainKey of chains) {
-    const chain = CHAINS[chainKey];
-    if (!chain?.explorerApi) continue;
+  const alchemyKey = w?.alchemyKey;
+  if (!alchemyKey) {
+    if (status) status.innerHTML = '<div class="alert alert-warn" style="font-size:0.78rem"><span>⚠</span> Sem Alchemy API Key. Vai a Config → adiciona a key para ativar a pesquisa multi-rede.</div>';
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-fill'; }
+    return;
+  }
+
+  // Try Alchemy RPC for all chains in PARALLEL
+  const chainsToTry = ['eth','base','arbitrum','optimism','polygon','scroll','linea'];
+  const queries = chainsToTry.map(async (chainKey) => {
+    if (!ALCHEMY_RPCS[chainKey]) return null;
+    const rpc = ALCHEMY_RPCS[chainKey] + alchemyKey;
     try {
-      const apiKey = w?.apiKey||'YourApiKeyToken';
-      const r = await fetch(`${chain.explorerApi}?module=proxy&action=eth_getTransactionByHash&txhash=${hash}&apikey=${apiKey}`,{signal:AbortSignal.timeout(6000)});
+      const r = await fetch(rpc, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_getTransactionByHash',params:[hash]}),
+        signal: AbortSignal.timeout(8000)
+      });
       const j = await r.json();
-      if (j.result?.blockNumber) {
-        // Get block timestamp
-        const br = await fetch(`${chain.explorerApi}?module=proxy&action=eth_getBlockByNumber&tag=${j.result.blockNumber}&boolean=false&apikey=${apiKey}`,{signal:AbortSignal.timeout(6000)});
-        const bj = await br.json();
-        const ts = bj.result?.timestamp ? parseInt(bj.result.timestamp,16) : null;
-        found = { chain:chainKey, timestamp:ts, tx:j.result };
-        break;
-      }
+      if (!j.result?.blockNumber) return null;
+      const br = await fetch(rpc, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({jsonrpc:'2.0',id:2,method:'eth_getBlockByNumber',params:[j.result.blockNumber, false]}),
+        signal: AbortSignal.timeout(8000)
+      });
+      const bj = await br.json();
+      const ts = bj.result?.timestamp ? parseInt(bj.result.timestamp, 16) : null;
+      return { chain: chainKey, timestamp: ts, tx: j.result };
+    } catch(e) { return null; }
+  });
+
+  const results = await Promise.all(queries);
+  const found = results.find(r => r !== null);
+
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-fill'; }
+
+  if (!found) {
+    if (status) status.innerHTML = '<div class="alert alert-warn" style="font-size:0.78rem"><span>⚠</span> Transação não encontrada em nenhuma das redes pesquisadas.</div>';
+    return;
+  }
+
+  const date = found.timestamp ? new Date(found.timestamp * 1000).toISOString().split('T')[0] : '';
+  if (date) {
+    const acq = document.getElementById('col_acq');
+    const dep = document.getElementById('col_dep');
+    if (acq && !acq.value) acq.value = date;
+    if (dep && !dep.value) dep.value = date;
+  }
+  const chainSel = document.getElementById('col_chain');
+  if (chainSel) chainSel.value = found.chain;
+
+  // Auto-detect protocol from `to` address
+  const toAddr = found.tx.to?.toLowerCase();
+  let protoLabel = '';
+  if (toAddr) {
+    if (toAddr === '0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb') protoLabel = 'Morpho Blue';
+    else if (CHAINS[found.chain]?.aavePool?.toLowerCase() === toAddr) protoLabel = 'AAVE V3';
+  }
+
+  let valueInfo = '';
+  if (found.tx.value && found.tx.value !== '0x0') {
+    try {
+      const valueWei = BigInt(found.tx.value);
+      const valueEth = Number(valueWei) / 1e18;
+      if (valueEth > 0.0001) valueInfo = ` · Valor: ${valueEth.toFixed(4)} ETH`;
     } catch(e) {}
   }
-  if (found) {
-    const date = found.timestamp ? new Date(found.timestamp*1000).toISOString().split('T')[0] : '';
-    if (date) { const acq=document.getElementById('col_acq'); if(acq) acq.value=date; }
-    if (date) { const dep=document.getElementById('col_dep'); if(dep) dep.value=date; }
-    const chainSel = document.getElementById('col_chain');
-    if (chainSel) chainSel.value = found.chain;
-    if (status) status.innerHTML = `<div class="alert alert-success" style="font-size:0.78rem"><span>✓</span> Transação encontrada em <strong>${CHAINS[found.chain]?.name}</strong>. Data: ${fmtDate(date)}. Confirma os restantes campos.</div>`;
-    toast('TX encontrada — campos preenchidos ✓','success');
-  } else {
-    if (status) status.innerHTML = `<div class="alert alert-warn" style="font-size:0.78rem"><span>⚠</span> Transação não encontrada. Verifica o hash ou preenche os campos manualmente.</div>`;
-  }
-  if (btn) { btn.disabled=false; btn.textContent='Auto-fill'; }
+
+  const blockNum = found.tx.blockNumber ? parseInt(found.tx.blockNumber, 16) : '?';
+  if (status) status.innerHTML = `<div class="alert alert-success" style="font-size:0.78rem"><span>✓</span> TX encontrada em <strong>${CHAINS[found.chain]?.name}</strong> (bloco ${blockNum}) · Data: <strong>${fmtDate ? fmtDate(date) : date}</strong>${valueInfo}${protoLabel ? ' · ' + protoLabel : ''}<br>Confirma os restantes campos antes de gravar.</div>`;
+  toast('TX encontrada — campos preenchidos ✓', 'success');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3878,6 +3922,8 @@ function handleParsed(rows, filename, cols) {
     window._colMap = colMap;
   }
   if (saveBtn) saveBtn.style.display='';
+  const previewBtn = document.getElementById('importPreviewBtn');
+  if (previewBtn) previewBtn.style.display='';
 }
 
 function detectColumns(cols, fmt) {
@@ -3903,40 +3949,182 @@ function buildColMapper(cols, detected) {
   ].join('');
 }
 
-function saveImport() {
+function previewImport() {
   if (!pendingImport) return;
-  const fmt = document.getElementById('imp_format')?.value||'auto';
-  const colMap = (fmt==='generic'||!window._colMap) ? {
+  const fmt = document.getElementById('imp_format')?.value || 'auto';
+  const colMap = (fmt === 'generic' || !window._colMap) ? {
     date: document.getElementById('cm_date')?.value,
     amount: document.getElementById('cm_amount')?.value,
     desc: document.getElementById('cm_desc')?.value,
     cashback: document.getElementById('cm_cashback')?.value,
   } : window._colMap;
-  const w = activeWallet();
-  const cardId = document.getElementById('imp_card_id')?.value||'';
-  if (!colMap.date||!colMap.amount) { toast('Selecciona pelo menos a coluna de Data e Valor','warn'); return; }
-  const importId = genId();
-  let count=0;
-  pendingImport.rows.forEach(row=>{
-    const rawDate = row[colMap.date]||'';
-    const rawAmt  = (row[colMap.amount]||'').toString().replace(/[^0-9.,\-]/g,'').replace(',','.');
-    const amt = Math.abs(parseFloat(rawAmt));
-    const rawCb = colMap.cashback?parseFloat((row[colMap.cashback]||'0').toString().replace(',','.'))||0:0;
-    const desc = row[colMap.desc]||'';
-    if (!rawDate||isNaN(amt)||amt<=0) return;
-    const date = normalizeDate(rawDate.toString());
-    // deduplicate
-    if (state.txs.find(t=>t.date===date&&Math.abs(t.amount-amt)<0.01&&t.desc===desc)) return;
-    state.txs.push({ id:genId(), walletId:w.id, cardId, importId, date, desc, amount:amt, currency:'EUR', cashback:rawCb, category:autoCategory(desc), note:'' });
-    count++;
+
+  if (!colMap.date || !colMap.amount) {
+    toast('Selecciona Data e Valor antes de pré-visualizar', 'warn');
+    return;
+  }
+
+  const stats = { total: 0, valid: 0, dup: 0, no_date: 0, no_amount: 0, error: 0 };
+  const validRows = [], rejectedRows = [];
+
+  pendingImport.rows.forEach((row, idx) => {
+    stats.total++;
+    try {
+      const rawDate = row[colMap.date];
+      const rawAmtVal = row[colMap.amount];
+      let amt = NaN;
+      if (typeof rawAmtVal === 'number') amt = Math.abs(rawAmtVal);
+      else if (rawAmtVal != null) amt = Math.abs(parseFloat(String(rawAmtVal).replace(/[^0-9.,\-]/g, '').replace(',', '.')));
+      const desc = String(row[colMap.desc] || '').trim();
+      const date = normalizeDate(rawDate);
+
+      if (!date) { stats.no_date++; if (rejectedRows.length < 3) rejectedRows.push({line: idx+2, reason: 'Data inválida', raw: rawDate, row}); return; }
+      if (!amt || isNaN(amt) || amt <= 0) { stats.no_amount++; if (rejectedRows.length < 3) rejectedRows.push({line: idx+2, reason: 'Valor inválido', raw: rawAmtVal, row}); return; }
+      if (state.txs.find(t => t.date === date && Math.abs(t.amount - amt) < 0.01 && t.desc === desc)) { stats.dup++; return; }
+
+      if (validRows.length < 5) validRows.push({date, amt, desc});
+      stats.valid++;
+    } catch(e) { stats.error++; }
   });
-  state.imports.push({ id:importId, walletId:w.id, cardId, date:new Date().toISOString(), count, filename:pendingImport.filename });
+
+  // Render preview
+  const el = document.getElementById('importPreview');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="alert ${stats.valid>0?'alert-success':'alert-warn'}" style="margin-bottom:0.75rem">
+      <span>${stats.valid>0?'✓':'⚠'}</span>
+      <div>
+        <strong>${stats.valid} transações prontas</strong> de ${stats.total} linhas analisadas
+        ${stats.dup>0?` · ${stats.dup} duplicadas`:''}
+        ${stats.no_date>0?` · ${stats.no_date} sem data`:''}
+        ${stats.no_amount>0?` · ${stats.no_amount} sem valor`:''}
+        ${stats.error>0?` · ${stats.error} erros`:''}
+      </div>
+    </div>
+    ${validRows.length>0 ? `
+      <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--gold);margin-bottom:0.4rem">Primeiras ${validRows.length} válidas</div>
+      <table style="width:100%;font-size:0.78rem;margin-bottom:0.75rem">
+        <thead><tr><th>Data</th><th>Descrição</th><th style="text-align:right">Valor</th></tr></thead>
+        <tbody>
+          ${validRows.map(r => `<tr><td class="mono">${r.date}</td><td>${r.desc.slice(0,40)}</td><td class="mono" style="text-align:right">€${r.amt.toFixed(2)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    ` : ''}
+    ${rejectedRows.length>0 ? `
+      <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--red);margin-bottom:0.4rem">Linhas rejeitadas (amostra)</div>
+      <table style="width:100%;font-size:0.78rem">
+        <thead><tr><th>Linha</th><th>Razão</th><th>Conteúdo</th></tr></thead>
+        <tbody>
+          ${rejectedRows.map(r => `<tr><td class="mono">${r.line}</td><td style="color:var(--red)">${r.reason}</td><td class="mono">"${String(r.raw||'').slice(0,40)}"</td></tr>`).join('')}
+        </tbody>
+      </table>
+    ` : ''}
+  `;
+}
+
+function saveImport() {
+  if (!pendingImport) return;
+  const fmt = document.getElementById('imp_format')?.value || 'auto';
+  const colMap = (fmt === 'generic' || !window._colMap) ? {
+    date: document.getElementById('cm_date')?.value,
+    amount: document.getElementById('cm_amount')?.value,
+    desc: document.getElementById('cm_desc')?.value,
+    cashback: document.getElementById('cm_cashback')?.value,
+  } : window._colMap;
+
+  const w = activeWallet();
+  const cardId = document.getElementById('imp_card_id')?.value || '';
+
+  if (!colMap.date || !colMap.amount) {
+    toast('Selecciona pelo menos a coluna de Data e Valor', 'warn');
+    return;
+  }
+
+  const importId = genId();
+  const stats = { total: 0, valid: 0, dup: 0, no_date: 0, no_amount: 0, error: 0 };
+  const errors = [];
+  const newTxs = [];
+
+  pendingImport.rows.forEach((row, idx) => {
+    stats.total++;
+    try {
+      const rawDate = row[colMap.date];
+      const rawAmtVal = row[colMap.amount];
+
+      // Robust amount parsing: accept number, string with comma/dot, with currency symbols
+      let amt = NaN;
+      if (typeof rawAmtVal === 'number') {
+        amt = Math.abs(rawAmtVal);
+      } else if (rawAmtVal != null) {
+        const cleaned = String(rawAmtVal).replace(/[^0-9.,\-]/g, '').replace(',', '.');
+        amt = Math.abs(parseFloat(cleaned));
+      }
+
+      // Cashback (optional)
+      let cb = 0;
+      if (colMap.cashback) {
+        const rawCb = row[colMap.cashback];
+        if (typeof rawCb === 'number') cb = rawCb;
+        else if (rawCb != null) cb = parseFloat(String(rawCb).replace(',', '.')) || 0;
+      }
+
+      const desc = String(row[colMap.desc] || '').trim();
+      const date = normalizeDate(rawDate);
+
+      // Validation with explicit reason tracking
+      if (!date) { stats.no_date++; if (errors.length < 5) errors.push(`Linha ${idx+2}: data inválida "${rawDate}"`); return; }
+      if (!amt || isNaN(amt) || amt <= 0) { stats.no_amount++; if (errors.length < 5) errors.push(`Linha ${idx+2}: valor inválido "${rawAmtVal}"`); return; }
+
+      // Dedup: same date + similar amount + same description
+      const dup = state.txs.find(t => t.date === date && Math.abs(t.amount - amt) < 0.01 && t.desc === desc);
+      if (dup) { stats.dup++; return; }
+
+      newTxs.push({
+        id: genId(), walletId: w.id, cardId, importId,
+        date, desc, amount: amt, currency: 'EUR',
+        cashback: cb, category: autoCategory(desc), note: ''
+      });
+      stats.valid++;
+    } catch(e) {
+      stats.error++;
+      if (errors.length < 5) errors.push(`Linha ${idx+2}: erro - ${e.message}`);
+    }
+  });
+
+  // Console diagnostic
+  console.log('[Import] Stats:', stats);
+  if (errors.length) console.log('[Import] First errors:', errors);
+
+  if (stats.valid === 0) {
+    let msg = `Nenhuma transação importada de ${stats.total} linhas analisadas.`;
+    if (stats.dup > 0) msg += ` ${stats.dup} duplicadas.`;
+    if (stats.no_date > 0) msg += ` ${stats.no_date} sem data válida.`;
+    if (stats.no_amount > 0) msg += ` ${stats.no_amount} sem valor.`;
+    if (stats.error > 0) msg += ` ${stats.error} erros.`;
+    msg += ' Vê F12 → Console para detalhes.';
+    toast(msg, 'warn', 9000);
+    return;
+  }
+
+  // Commit
+  newTxs.forEach(tx => state.txs.push(tx));
+  state.imports.push({
+    id: importId, walletId: w.id, cardId,
+    date: new Date().toISOString(),
+    count: stats.valid, filename: pendingImport.filename
+  });
   saveState();
-  pendingImport=null; window._colMap=null;
+  pendingImport = null;
+  window._colMap = null;
   closeModal('modalImport');
-  toast(`${count} transações importadas ✓`,'success');
+
+  let msg = `${stats.valid} transações importadas ✓`;
+  if (stats.dup > 0) msg += ` · ${stats.dup} duplicadas ignoradas`;
+  if (stats.no_date + stats.no_amount > 0) msg += ` · ${stats.no_date + stats.no_amount} rejeitadas`;
+  toast(msg, 'success', 7000);
   render();
 }
+
 
 function deleteImport(importId) {
   if (!confirm('Remover este import e todas as suas transações?')) return;
@@ -3950,15 +4138,52 @@ function deleteTx(id) {
   saveState(); render();
 }
 
-function normalizeDate(d) {
-  if (!d) return '';
-  const iso = d.match(/(\d{4})-(\d{2})-(\d{2})/); if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const eu  = d.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/); if (eu) return `${eu[3]}-${eu[2]}-${eu[1]}`;
-  const us  = d.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/); if (us) return `${us[3]}-${us[1]}-${us[2]}`;
-  // Excel serial date
-  const num = parseInt(d);
-  if (!isNaN(num)&&num>40000) { const d2=new Date((num-25569)*86400000); return d2.toISOString().split('T')[0]; }
-  return d;
+function normalizeDate(input) {
+  if (input == null || input === '') return null;
+
+  // Excel serial number (days since 1899-12-30)
+  if (typeof input === 'number' || (typeof input === 'string' && /^\d{4,5}(\.\d+)?$/.test(input))) {
+    const serial = Number(input);
+    if (serial > 1 && serial < 90000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      if (!isNaN(d)) return d.toISOString().split('T')[0];
+    }
+  }
+
+  // Date object directly
+  if (input instanceof Date) {
+    if (!isNaN(input)) return input.toISOString().split('T')[0];
+  }
+
+  const s = String(input).trim();
+
+  // ISO format YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+
+  // ISO with time and timezone (UTC, Z, +00:00)
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ]/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+
+  // DD/MM/YYYY or DD-MM-YYYY (European)
+  m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if (m) {
+    const d = m[1].padStart(2, '0'), mo = m[2].padStart(2, '0'), y = m[3];
+    return `${y}-${mo}-${d}`;
+  }
+
+  // DD/MM/YY (assume 20YY)
+  m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2})$/);
+  if (m) {
+    const d = m[1].padStart(2, '0'), mo = m[2].padStart(2, '0'), y = '20' + m[3];
+    return `${y}-${mo}-${d}`;
+  }
+
+  // Fallback: try Date constructor
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) return parsed.toISOString().split('T')[0];
+
+  return null;
 }
 
 function autoCategory(desc='') {
