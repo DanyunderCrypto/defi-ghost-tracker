@@ -753,12 +753,11 @@ td.muted  { color:var(--muted); }
    WALLET SELECTOR DROPDOWN
 ══════════════════════════════════════════════════ */
 .wallet-dropdown {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
+  position: fixed;
   background: var(--surface-elev);
   border: 1px solid var(--border-soft);
   min-width: 280px;
+  max-width: 360px;
   max-height: 70vh;
   overflow-y: auto;
   z-index: 9999;
@@ -1449,6 +1448,178 @@ td.muted  { color:var(--muted); }
   font-size: 1rem;
   font-weight: 700;
   margin-top: 0.2rem;
+}
+
+/* ══════════════════════════════════════════════════
+   FASE 1: Tabular figures + refined money typography
+   ══════════════════════════════════════════════════ */
+.stat-value,
+.stat-sub,
+td.mono,
+.mono,
+.value-display,
+.value-num,
+.fiat-value,
+.token-value,
+.amount {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+}
+
+/* Currency symbol styling — secondary to the number */
+.currency-symbol {
+  font-size: 0.8em;
+  opacity: 0.65;
+  margin-right: 0.1em;
+  font-weight: 500;
+}
+
+/* Big display values (Total Balance, hero stats) */
+.value-display {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Medium values (stat cards) */
+.stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small mono values (tables, txhashes) */
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hover state on monospace dim text */
+td.mono:hover { opacity: 1 !important; }
+
+.mempool-block-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #0A0A0F;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  border: 1.5px solid rgba(255,255,255,0.2);
+}
+
+/* ══════════════════════════════════════════════════
+   FASE 3: Simulator auto cards
+   ══════════════════════════════════════════════════ */
+.sim-auto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.sim-auto-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--surface-elev), var(--surface));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 1.2rem 1.1rem;
+  transition: transform 200ms var(--easing), border-color 200ms;
+}
+.sim-auto-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(212,175,122,0.25);
+}
+
+.sim-auto-card.sim-auto-buffer {
+  border-top: 3px solid var(--accent, var(--gold));
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), var(--surface));
+}
+
+.sim-auto-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.7rem;
+}
+
+.sim-auto-value {
+  font-family: var(--display);
+  font-size: 2rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.05;
+  margin-bottom: 0.5rem;
+}
+
+.sim-auto-sub {
+  font-family: var(--body);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.sim-auto-badge {
+  display: inline-block;
+  margin-top: 0.7rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+/* Calculadora grid */
+.calc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+}
+
+.calc-card {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+.calc-card-label {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.45rem;
+}
+.calc-card-value {
+  font-family: var(--display);
+  font-size: 1.3rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.calc-card-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  font-family: var(--mono);
+}
+
+.calc-card.positive .calc-card-value { color: var(--green); }
+.calc-card.negative .calc-card-value { color: var(--red); }
+.calc-card.gold .calc-card-value { color: var(--gold); }
+.calc-card.featured {
+  background: linear-gradient(180deg, rgba(212,175,122,0.08), rgba(212,175,122,0.02));
+  border-color: rgba(212,175,122,0.3);
 }
 </style>
 </head>
@@ -3954,6 +4125,45 @@ function setMempoolSort(s) {
   render();
 }
 
+
+// ─────────────────────────────────────────────────
+// FASE 2: Group lots by date + asset + wallet (fiscal FIFO logic)
+// ─────────────────────────────────────────────────
+function mempoolGroupLots(cols) {
+  const groups = {};
+  cols.forEach(c => {
+    const key = `${c.acqDate}|${c.asset||'?'}|${c.walletId}`;
+    if (!groups[key]) {
+      groups[key] = {
+        id: 'group_' + key,
+        acqDate: c.acqDate,
+        asset: c.asset,
+        walletId: c.walletId,
+        chain: c.chain,
+        proto: c.proto,
+        origin: c.origin,
+        qty: 0,
+        eur: 0,
+        price: c.price,
+        txhashes: [],
+        ids: [],
+        _count: 0,
+        notes: c.notes,
+      };
+    }
+    const g = groups[key];
+    g.qty += (+c.qty || 0);
+    g.eur += (+c.eur || 0);
+    if (c.txhash) g.txhashes.push(c.txhash);
+    g.ids.push(c.id);
+    g._count += 1;
+    // First-seen wins for some attributes; show "multiple" if conflict
+    if (g.chain !== c.chain) g.chain = 'multi';
+    if (g.proto !== c.proto) g.proto = 'multi';
+  });
+  return Object.values(groups);
+}
+
 function mempoolBlockSize(eur) {
   // Logarithmic scale: 60px (eur<=100) → 180px (eur>=10000)
   const min = 60, max = 180;
@@ -3964,10 +4174,12 @@ function mempoolBlockSize(eur) {
   return Math.round(min + ratio * (max - min));
 }
 
-function mempoolBlockDepth(daysHeld) {
-  // 10px (fresh) → 40px (mature)
+function mempoolBlockDepth(daysHeld, size) {
+  // Cubic feel: depth scales WITH size (50-75% of size based on maturity)
+  // Fresh lots: 50% depth (squat). Mature lots: 75% depth (tall pillar).
   const d = Math.max(0, Math.min(365, daysHeld));
-  return Math.round(10 + (d / 365) * 30);
+  const ratio = 0.5 + (d / 365) * 0.25;
+  return Math.round((size || 80) * ratio);
 }
 
 function mempoolBlockStatus(daysHeld) {
@@ -4008,7 +4220,8 @@ function mempoolShowTooltip(e, lot) {
     <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Dias detidos</span><span class="mempool-tooltip-value">${held} dias</span></div>
     <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Isenção em</span><span class="mempool-tooltip-value">${status==='exempt'?'✓ Já isento':left+' dias'}</span></div>
     <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Data isenção</span><span class="mempool-tooltip-value">${status==='exempt'?'—':fmtDate(exemptDate.toISOString().split('T')[0])}</span></div>
-    ${lot.txhash?`<div class="mempool-tooltip-row"><span class="mempool-tooltip-label">TX</span><span class="mempool-tooltip-value" style="font-size:0.6rem">${truncTx(lot.txhash)}</span></div>`:''}
+    ${lot._count>1?`<div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Supplies</span><span class="mempool-tooltip-value" style="color:var(--gold)">${lot._count}× agrupados</span></div>`:''}
+    ${lot.txhash?`<div class="mempool-tooltip-row"><span class="mempool-tooltip-label">TX${lot._count>1?` (1 de ${lot.txCount})`:''}</span><span class="mempool-tooltip-value" style="font-size:0.6rem">${truncTx(lot.txhash)}</span></div>`:''}
     <div style="text-align:center"><span class="mempool-tooltip-status" style="background:${mempoolBlockColors(status).top}33;color:${mempoolBlockColors(status).top};border:1px solid ${mempoolBlockColors(status).top}66">${mempoolStatusLabel(status)}</span></div>
   `;
   tip.classList.add('visible');
@@ -4051,7 +4264,7 @@ function renderStrategy(w) {
       if(!cols.length) return '';
       // Apply filter
       const filt = window.mempoolFilter || 'all';
-      let displayCols = cols.map(c=>({...c, _held: daysHeld(c.acqDate), _status: mempoolBlockStatus(daysHeld(c.acqDate))}));
+      let displayCols = mempoolGroupLots(cols).map(c=>({...c, _held: daysHeld(c.acqDate), _status: mempoolBlockStatus(daysHeld(c.acqDate))}));
       const counts = { all: displayCols.length };
       ['exempt','imminent','maturing','aging','fresh'].forEach(st=>{ counts[st] = displayCols.filter(c=>c._status===st).length; });
       if(filt!=='all') displayCols = displayCols.filter(c=>c._status===filt);
@@ -4117,14 +4330,14 @@ function renderStrategy(w) {
           <div class="mempool-grid">
             ${displayCols.length ? displayCols.map(c=>{
               const size = mempoolBlockSize(+c.eur||0);
-              const depth = mempoolBlockDepth(c._held);
+              const depth = mempoolBlockDepth(c._held, size);
               const colors = mempoolBlockColors(c._status);
-              const lotJson = JSON.stringify({id:c.id, asset:c.asset, eur:c.eur, qty:c.qty, acqDate:c.acqDate, chain:c.chain, txhash:c.txhash||''}).replace(/"/g,'&quot;');
+              const lotJson = JSON.stringify({id:c.id, asset:c.asset, eur:c.eur, qty:c.qty, acqDate:c.acqDate, chain:c.chain, txhash:(c.txhashes&&c.txhashes[0])||c.txhash||'', _count:c._count||1, txCount:(c.txhashes||[]).length}).replace(/"/g,'&quot;');
               return `<div class="mempool-block"
                 style="width:${size}px;height:${size}px;--blockColor:${colors.top};--blockSideColor:${colors.side};--blockDepth:${depth}px"
                 onmousemove="mempoolShowTooltip(event, ${lotJson})"
                 onmouseleave="mempoolHideTooltip()">
-                <div class="mempool-block-top">€${(+c.eur>=1000)?(+c.eur/1000).toFixed(1)+'k':Math.round(+c.eur||0)}</div>
+                <div class="mempool-block-top">€${(+c.eur>=1000)?(+c.eur/1000).toFixed(1)+'k':Math.round(+c.eur||0)}${c._count>1?`<span class="mempool-block-count">${c._count}</span>`:''}</div>
                 <div class="mempool-block-side mempool-block-right"></div>
                 <div class="mempool-block-side mempool-block-bottom"></div>
               </div>`;
@@ -4249,60 +4462,138 @@ function renderSimulator(w) {
     }
   });
 
-  return `
-    <div class="section-row"><div class="section-label">Simulador de Liquidação Multi-Protocolo</div></div>
+  // Compute automatic safety analysis for first position
+  let autoCards = '';
+  if (simPositions.length) {
+    const sp = simPositions[0];
+    const liqThreshPct = sp.proto === 'aave' ? sp.liqThresh : sp.liqThresh*100;
+    // Liquidation happens when: collateral * (liqThresh/100) = debt
+    // → required collateral = debt / (liqThresh/100)
+    // → drop allowed = (collateral - required) / collateral
+    const requiredCol = sp.debt / (liqThreshPct/100);
+    const dropAllowed = sp.collateral > 0 ? Math.max(0, (sp.collateral - requiredCol) / sp.collateral) * 100 : 0;
+    const valueAtRisk = sp.collateral * (dropAllowed/100);
+    const liqPrice = sp.collateral - valueAtRisk;
+    const bufferLevel = dropAllowed >= 50 ? 'safe' : dropAllowed >= 30 ? 'caution' : dropAllowed >= 15 ? 'warning' : 'danger';
+    const bufferColor = { safe:'var(--green)', caution:'var(--gold)', warning:'var(--amber)', danger:'var(--red)' }[bufferLevel];
+    const bufferLabel = { safe:'SEGURO', caution:'ATENÇÃO', warning:'ALERTA', danger:'CRÍTICO' }[bufferLevel];
 
-    <div class="two-col">
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">🔴 Simulador de Liquidação</span></div>
-        <div class="panel-body">
-          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Simula o impacto de uma queda de preço no teu Health Factor. Funciona para AAVE e Morpho.</p>
-          ${simPositions.length === 0 ? `<div class="alert alert-info"><span>ℹ</span><div>Sem posições activas para simular. Faz Refresh primeiro.</div></div>` : ''}
-          <div class="form-group">
-            <label class="form-label">Posição a simular</label>
-            <select class="form-select" id="sim_pos" onchange="updateSim()">
-              ${simPositions.map(sp=>`<option value="${sp.id}">${sp.label} — HF ${sp.hf?sp.hf.toFixed(3):'—'}</option>`).join('')}
-            </select>
+    autoCards = `
+      <div class="sim-auto-grid">
+        <div class="sim-auto-card sim-auto-buffer" style="--accent:${bufferColor}">
+          <div class="sim-auto-label">Buffer de Segurança</div>
+          <div class="sim-auto-value">
+            <span style="color:${bufferColor}">−${dropAllowed.toFixed(1)}<span class="currency-symbol">%</span></span>
           </div>
-          <div class="form-group">
-            <label class="form-label">Queda de preço do colateral: <span id="sim_drop_val" style="color:var(--gold)">0%</span></label>
-            <input type="range" class="sim-slider" id="sim_drop" min="0" max="90" value="0" oninput="updateSim()">
+          <div class="sim-auto-sub">O preço do colateral pode cair <strong style="color:${bufferColor}">${dropAllowed.toFixed(1)}%</strong> antes da liquidação</div>
+          <div class="sim-auto-badge" style="background:${bufferColor}22;color:${bufferColor};border-color:${bufferColor}66">${bufferLabel}</div>
+        </div>
+
+        <div class="sim-auto-card">
+          <div class="sim-auto-label">Valor em Risco</div>
+          <div class="sim-auto-value">
+            <span class="currency-symbol">$</span>${fmt(valueAtRisk, 0)}
           </div>
-          <div class="form-group">
-            <label class="form-label">Aumento da dívida (juros acumulados): <span id="sim_debt_val" style="color:var(--amber)">0%</span></label>
-            <input type="range" class="sim-slider" id="sim_debt" min="0" max="50" value="0" oninput="updateSim()">
+          <div class="sim-auto-sub">Quanto perderias se o preço caísse até ao limite de liquidação</div>
+        </div>
+
+        <div class="sim-auto-card">
+          <div class="sim-auto-label">Colateral · Limite</div>
+          <div class="sim-auto-value">
+            <span class="currency-symbol">$</span>${fmt(liqPrice, 0)}
           </div>
-          <div class="sim-result" id="simResult">
-            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Resultado da Simulação</div>
-            <div id="simOutput" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem"></div>
+          <div class="sim-auto-sub">Valor do colateral no momento da liquidação (debt ÷ LTV<sub>liq</sub>)</div>
+        </div>
+
+        <div class="sim-auto-card">
+          <div class="sim-auto-label">Health Factor Atual</div>
+          <div class="sim-auto-value">${sp.hf ? sp.hf.toFixed(3) : '—'}</div>
+          <div class="sim-auto-sub">
+            Liquidação quando HF &lt; 1.000 ·
+            ${sp.proto==='aave'?'LTV<sub>liq</sub> '+sp.liqThresh.toFixed(0)+'%':'LLTV '+(sp.liqThresh*100).toFixed(0)+'%'}
           </div>
         </div>
       </div>
+    `;
+  }
 
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">📅 Calculadora 365 Dias</span></div>
-        <div class="panel-body">
-          <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Planeia o teu próximo depósito. Calcula empréstimo disponível, juros até isenção e poupança fiscal.</p>
-          <div class="form-row">
-            <div class="form-group"><label class="form-label">Valor a depositar (€)</label><input class="form-input" id="calc_eur" type="number" placeholder="5000" oninput="updateCalc()"></div>
-            <div class="form-group"><label class="form-label">Ativo</label><select class="form-select" id="calc_asset" onchange="updateCalc()"><option value="ETH">ETH</option><option value="BTC">BTC</option><option value="stETH">stETH</option><option value="USDC">USDC</option></select></div>
-            <div class="form-group"><label class="form-label">LTV alvo (%)</label><input class="form-input" id="calc_ltv" type="number" value="40" max="80" oninput="updateCalc()"></div>
-            <div class="form-group"><label class="form-label">Taxa de Juro Anual (%)</label><input class="form-input" id="calc_rate" type="number" value="4" oninput="updateCalc()"></div>
-          </div>
-          <div class="sim-result" id="calcResult">
-            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Projecção</div>
-            <div id="calcOutput" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem"></div>
-          </div>
+  return `
+    <div class="section-row"><div class="section-label">Simulador de Liquidação Multi-Protocolo</div></div>
+
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head">
+        <span class="panel-title">🛡️ Análise Automática</span>
+        <select class="form-select" id="sim_pos" onchange="updateSim()" style="max-width:340px;font-size:0.8rem">
+          ${simPositions.map(sp=>`<option value="${sp.id}">${sp.label} — HF ${sp.hf?sp.hf.toFixed(3):'—'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="panel-body">
+        ${simPositions.length === 0 ? '<div class="alert alert-info"><span>ℹ</span><div>Sem posições activas para simular. Faz Refresh primeiro.</div></div>' : autoCards}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head" onclick="document.getElementById('simExploreBody').classList.toggle('hidden')" style="cursor:pointer;user-select:none">
+        <span class="panel-title">🎚️ Modo Exploratório <span style="font-size:0.7rem;color:var(--muted);font-weight:400;margin-left:0.5rem">(clica para expandir)</span></span>
+      </div>
+      <div class="panel-body hidden" id="simExploreBody">
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Simula manualmente uma queda de preço + acumulação de juros.</p>
+        <div class="form-group">
+          <label class="form-label">Queda de preço do colateral: <span id="sim_drop_val" style="color:var(--gold)">0%</span></label>
+          <input type="range" class="sim-slider" id="sim_drop" min="0" max="90" value="0" oninput="updateSim()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Aumento da dívida (juros acumulados): <span id="sim_debt_val" style="color:var(--amber)">0%</span></label>
+          <input type="range" class="sim-slider" id="sim_debt" min="0" max="50" value="0" oninput="updateSim()">
+        </div>
+        <div class="sim-result" id="simResult">
+          <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Resultado da Simulação</div>
+          <div id="simOutput" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem"></div>
         </div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-head"><span class="panel-title">💰 Contador de Juros em Tempo Real</span></div>
-      <div class="panel-body" style="text-align:center">
-        <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Juros a acumular neste momento</div>
-        <div class="interest-ticker" id="interestTickerSim">$0.000000</div>
-        <div style="font-size:0.82rem;color:var(--muted);margin-top:0.5rem">Baseado em ${state.cards.length||0} empréstimos registados · Taxa média: ${fmt(calcAvgRate(),2)}% APY</div>
+      <div class="panel-head"><span class="panel-title">📅 Calculadora 365 Dias — Planeamento Fiscal</span></div>
+      <div class="panel-body">
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem">Simula o impacto líquido de um lote ao longo de 365 dias: juros ganhos no colateral menos juros pagos no empréstimo. No fim do prazo, a mais-valia fica isenta de IRS.</p>
+
+        <div class="form-row" style="margin-bottom:1rem">
+          <div class="form-group">
+            <label class="form-label">Asset Colateral</label>
+            <select class="form-select" id="calc_asset" onchange="updateCalc()">
+              <option value="ETH">ETH (sem yield)</option>
+              <option value="weETH">weETH (ether.fi · ~3.2% APR)</option>
+              <option value="wstETH">wstETH (Lido · ~2.9% APR)</option>
+              <option value="rETH">rETH (Rocket Pool · ~2.7% APR)</option>
+              <option value="cbBTC">cbBTC (sem yield nativo)</option>
+              <option value="BTC">BTC (sem yield nativo)</option>
+              <option value="USDC">USDC (sem yield nativo)</option>
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Valor depositado</label><div style="display:flex;align-items:center;gap:0.3rem"><span class="currency-symbol" style="font-size:1.1rem">€</span><input class="form-input" id="calc_eur" type="number" placeholder="5000" oninput="updateCalc()" style="flex:1"></div></div>
+          <div class="form-group"><label class="form-label">APY Colateral (%)</label><input class="form-input" id="calc_apr_col" type="number" value="3.2" step="0.1" oninput="updateCalc()"></div>
+        </div>
+
+        <div class="form-row" style="margin-bottom:1rem">
+          <div class="form-group">
+            <label class="form-label">Asset Emprestado</label>
+            <select class="form-select" id="calc_borrow_asset" onchange="updateCalc()">
+              <option value="USDC">USDC</option>
+              <option value="USDT">USDT</option>
+              <option value="EURC">EURC</option>
+              <option value="DAI">DAI</option>
+              <option value="GHO">GHO (AAVE)</option>
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">LTV alvo (%)</label><input class="form-input" id="calc_ltv" type="number" value="40" max="80" oninput="updateCalc()"></div>
+          <div class="form-group"><label class="form-label">APY Empréstimo (%)</label><input class="form-input" id="calc_apr_borrow" type="number" value="5.5" step="0.1" oninput="updateCalc()"></div>
+        </div>
+
+        <div class="sim-result" id="calcResult">
+          <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Projecção a 365 dias</div>
+          <div id="calcOutput" class="calc-grid"></div>
+        </div>
       </div>
     </div>
   `;
@@ -4358,19 +4649,77 @@ function updateSim() {
 
 function updateCalc() {
   const eur = +document.getElementById('calc_eur')?.value || 0;
+  const asset = document.getElementById('calc_asset')?.value || 'ETH';
+  const borrowAsset = document.getElementById('calc_borrow_asset')?.value || 'USDC';
   const ltv = +document.getElementById('calc_ltv')?.value || 40;
-  const rate = +document.getElementById('calc_rate')?.value || 4;
-  if (!eur) { document.getElementById('calcOutput').innerHTML=''; return; }
+  const aprCol = +document.getElementById('calc_apr_col')?.value || 0;
+  const aprBorrow = +document.getElementById('calc_apr_borrow')?.value || 0;
+
+  const out = document.getElementById('calcOutput');
+  if (!out) return;
+
+  if (!eur) { out.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem">Insere o valor do depósito para ver a projecção.</div>'; return; }
+
+  // Suggested APY per asset (Portugal-compatible safe estimates)
+  const SUGGESTED_APR = { ETH:0, weETH:3.2, wstETH:2.9, rETH:2.7, cbBTC:0, BTC:0, USDC:0 };
+
+  // Loan calculations
   const loan = eur * (ltv/100);
-  const interest365 = loan * (rate/100);
-  const taxSaving = eur * 0.28; // 28% tax on potential gain avoided
-  const netBenefit = taxSaving - interest365;
-  document.getElementById('calcOutput').innerHTML = [
-    ['Empréstimo Disponível','€'+fmt(loan),'var(--blue)'],
-    ['Juros em 365 dias','€'+fmt(interest365),'var(--amber)'],
-    ['Poupança Fiscal Est.','€'+fmt(taxSaving),'var(--green)'],
-    ['Benefício Líquido','€'+fmt(netBenefit),netBenefit>0?'var(--green)':'var(--red)'],
-  ].map(([l,v,c])=>`<div style="background:var(--bg3);padding:0.6rem 0.75rem;border-radius:var(--radius)"><div style="font-family:var(--mono);font-size:0.58rem;text-transform:uppercase;color:var(--muted);margin-bottom:0.2rem">${l}</div><div style="font-family:var(--display);font-size:1.2rem;color:${c}">${v}</div></div>`).join('');
+
+  // Yield earned on collateral over 365 days
+  const colYield = eur * (aprCol/100);
+
+  // Cost of borrowing over 365 days
+  const borrowCost = loan * (aprBorrow/100);
+
+  // Net yield (gross — could be positive or negative)
+  const netYield = colYield - borrowCost;
+
+  // Effective yield rate on deposited capital
+  const effectiveYield = eur > 0 ? (netYield / eur) * 100 : 0;
+
+  // Tax savings: in PT, capital gains on crypto held >365d are tax-exempt.
+  // If you'd otherwise pay 28% on assumed appreciation, this avoids it.
+  // We can't predict appreciation so we show what is mathematically known.
+  const exemptThreshold = 365;
+
+  out.innerHTML = `
+    <div class="calc-card featured">
+      <div class="calc-card-label">Empréstimo Disponível</div>
+      <div class="calc-card-value"><span class="currency-symbol">€</span>${fmt(loan, 0)}</div>
+      <div class="calc-card-sub">${ltv}% LTV · ${borrowAsset}</div>
+    </div>
+
+    <div class="calc-card ${colYield>0?'positive':''}">
+      <div class="calc-card-label">Juros Ganhos · Colateral</div>
+      <div class="calc-card-value">+ <span class="currency-symbol">€</span>${fmt(colYield, 2)}</div>
+      <div class="calc-card-sub">${aprCol}% APR · ${asset}</div>
+    </div>
+
+    <div class="calc-card negative">
+      <div class="calc-card-label">Juros Pagos · Empréstimo</div>
+      <div class="calc-card-value">− <span class="currency-symbol">€</span>${fmt(borrowCost, 2)}</div>
+      <div class="calc-card-sub">${aprBorrow}% APR · ${borrowAsset}</div>
+    </div>
+
+    <div class="calc-card ${netYield>=0?'positive':'negative'}">
+      <div class="calc-card-label">Saldo Líquido · 365d</div>
+      <div class="calc-card-value">${netYield>=0?'+ ':'− '}<span class="currency-symbol">€</span>${fmt(Math.abs(netYield), 2)}</div>
+      <div class="calc-card-sub">Yield efectivo ${effectiveYield>=0?'+':''}${effectiveYield.toFixed(2)}%</div>
+    </div>
+
+    <div class="calc-card gold">
+      <div class="calc-card-label">Custo Mensal · Empréstimo</div>
+      <div class="calc-card-value"><span class="currency-symbol">€</span>${fmt(borrowCost/12, 2)}</div>
+      <div class="calc-card-sub">/mês a pagar</div>
+    </div>
+
+    <div class="calc-card featured">
+      <div class="calc-card-label">Mais-Valia Isenta</div>
+      <div class="calc-card-value gold"><span class="currency-symbol">€</span>${fmt(eur, 0)}+</div>
+      <div class="calc-card-sub">após ${exemptThreshold} dias (IRS 0%)</div>
+    </div>
+  `;
 }
 
 let interestAnimId = null;
@@ -4418,7 +4767,6 @@ function startInterestTickerSim() {
   const perSec = calcPerSecondInterest();
   let base = calcTotalInterest(), startTs = Date.now();
   function tick() {
-    const el = document.getElementById('interestTickerSim');
     if (!el) return;
     const current = base + perSec*((Date.now()-startTs)/1000);
     el.textContent = '$'+current.toFixed(8);
@@ -4578,70 +4926,175 @@ function renderFiscal(w) {
 // ══════════════════════════════════════════════════════════
 function renderSettings(w) {
   return `
-    <div class="section-label" style="margin-bottom:1.3rem">Configurações</div>
-    <div class="two-col">
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">Etherscan API Key</span></div>
-        <div class="panel-body">
-              <div class="alert alert-success" style="margin-bottom:1rem;font-size:0.8rem"><span>⭐</span><div><strong>Alchemy (recomendado)</strong> — funciona para todas as chains (Base, ETH, Arbitrum, Linea...):<br>1. <strong>alchemy.com</strong> → Sign Up grátis<br>2. Create App → selecciona a chain (ex: Base)<br>3. Copia a API Key e cola abaixo</div></div>
-          <div class="form-group"><label class="form-label">Alchemy API Key ${w.alchemyKey?'<span style=\'color:var(--green)\'>✓ Configurada</span>':''}</label><input class="form-input" id="set_alchemy_key" value="${w.alchemyKey||''}" placeholder="Alchemy API Key (funciona em todas as chains)"></div>
-          <div style="height:1px;background:var(--border);margin:1rem 0"></div>
-          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem"><span>ℹ</span><div><strong>Etherscan</strong> — alternativa, mas só funciona para ETH mainnet no plano gratuito.</div></div>
-          <div class="form-group"><label class="form-label">Etherscan API Key ${w.apiKey?'<span style=\'color:var(--muted)\'>✓ Configurada</span>':''}</label><input class="form-input" id="set_apikey" value="${w.apiKey||''}" placeholder="Etherscan API Key (opcional)"></div>
-          <button class="btn btn-gold btn-sm" onclick="saveApiKey()">Guardar Keys</button>
+    <div class="section-row" style="margin-bottom:1.5rem">
+      <div class="section-label">Configurações Aurum</div>
+    </div>
+
+    <!-- ── Conexões ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head"><span class="panel-title">⚙️ Conexões — API Keys</span></div>
+      <div class="panel-body">
+        <div class="alert alert-success" style="margin-bottom:1rem;font-size:0.8rem">
+          <span>⭐</span>
+          <div><strong>Alchemy</strong> é a opção recomendada e funciona para todas as chains.<br>
+          1. <strong>alchemy.com</strong> → Sign Up grátis<br>
+          2. Create App → selecciona a chain (ex: Base)<br>
+          3. Copia a API Key e cola abaixo</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Alchemy API Key ${w.alchemyKey?'<span style="color:var(--green)">✓ Configurada</span>':''}</label>
+          <input class="form-input" id="set_alchemy_key" value="${w.alchemyKey||''}" placeholder="Cola aqui a tua Alchemy API Key">
+        </div>
+        <div style="height:1px;background:var(--border-soft);margin:1rem 0"></div>
+        <div class="form-group">
+          <label class="form-label">Etherscan API Key (opcional) ${w.apiKey?'<span style="color:var(--text-muted)">✓ Configurada</span>':''}</label>
+          <input class="form-input" id="set_apikey" value="${w.apiKey||''}" placeholder="Apenas se precisares (Alchemy chega para tudo)">
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="saveApiKey()">Guardar Keys</button>
+      </div>
+    </div>
+
+    <!-- ── Notificações ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head"><span class="panel-title">🔔 Notificações — Telegram</span></div>
+      <div class="panel-body">
+        <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem">
+          <span>ℹ</span>
+          <div>Recebe alertas de HF crítico no Telegram:<br>
+          1. Cria bot em <strong>@BotFather</strong> → /newbot<br>
+          2. Copia o token<br>
+          3. Envia /start ao teu bot para obter o Chat ID</div>
+        </div>
+        <div class="form-group"><label class="form-label">Bot Token</label><input class="form-input" id="set_tg_token" value="${w.tgToken||''}" placeholder="1234567890:AAF..."></div>
+        <div class="form-group"><label class="form-label">Chat ID</label><input class="form-input" id="set_tg_chat" value="${w.tgChat||''}" placeholder="O teu user ID ou group ID"></div>
+        <div class="form-group">
+          <label class="form-label">Alerta quando HF cair abaixo de</label>
+          <input class="form-input" id="set_hf_threshold" type="number" step="0.1" min="1.0" max="3.0" value="${w.hfThreshold||1.2}" placeholder="1.2">
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button class="btn btn-gold btn-sm" onclick="saveTelegram()">Guardar</button>
+          <button class="btn btn-outline btn-sm" onclick="testTelegram()">Testar</button>
         </div>
       </div>
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">Alertas Telegram</span></div>
-        <div class="panel-body">
-          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem"><span>ℹ</span><div>Recebe alertas de HF crítico no Telegram:<br>1. Cria bot em <strong>@BotFather</strong> → /newbot<br>2. Copia o token<br>3. Envia /start ao teu bot para obter o Chat ID</div></div>
-          <div class="form-group"><label class="form-label">Bot Token</label><input class="form-input" id="set_tg_token" value="${w.tgToken||''}" placeholder="1234567890:AAF..."></div>
-          <div class="form-group"><label class="form-label">Chat ID</label><input class="form-input" id="set_tg_chat" value="${w.tgChat||''}" placeholder="O teu user ID ou group ID"></div>
-          <div style="display:flex;gap:0.5rem">
-            <button class="btn btn-gold btn-sm" onclick="saveTelegram()">Guardar</button>
-            <button class="btn btn-outline btn-sm" onclick="testTelegram()">Testar</button>
+    </div>
+
+    <!-- ── Preferências ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head"><span class="panel-title">🎨 Preferências</span></div>
+      <div class="panel-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Moeda principal</label>
+            <select class="form-select" id="set_currency" onchange="savePref('currency', this.value)">
+              <option value="EUR" ${(w.currency||'EUR')==='EUR'?'selected':''}>EUR (€)</option>
+              <option value="USD" ${(w.currency||'EUR')==='USD'?'selected':''}>USD ($)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Decimais nos valores</label>
+            <select class="form-select" id="set_decimals" onchange="savePref('decimals', this.value)">
+              <option value="0" ${(w.decimals||2)==0?'selected':''}>Sem decimais (€100)</option>
+              <option value="2" ${(w.decimals||2)==2?'selected':''}>2 decimais (€100,50)</option>
+              <option value="4" ${(w.decimals||2)==4?'selected':''}>4 decimais (€100,5000)</option>
+            </select>
+          </div>
+          <div class="form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
+            <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
+              <input type="checkbox" id="set_stealth" ${w.stealthMode?'checked':''} onchange="savePref('stealthMode', this.checked); render()">
+              <span style="font-size:0.85rem">Modo Stealth (ocultar valores)</span>
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4">Substitui valores por ••• em sítios públicos. Clica num valor para revelar temporariamente.</div>
           </div>
         </div>
       </div>
     </div>
-    <div class="panel" style="margin-top:1.3rem">
-      <div class="panel-head"><span class="panel-title">⬡ Teste de Conexão RPC</span></div>
-      <div class="panel-body">
-        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Verifica se a app consegue ligar a cada rede e ler a tua posição AAVE.</p>
-        <button class="btn btn-gold btn-sm" onclick="runConnectionTest()">▶ Testar Conexão Agora</button>
-        <div id="connTestResults" style="margin-top:1rem;font-family:var(--mono);font-size:0.75rem;display:flex;flex-direction:column;gap:0.4rem"></div>
+
+    <!-- ── Diagnóstico (colapsado) ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head" onclick="document.getElementById('diagBody').classList.toggle('hidden')" style="cursor:pointer;user-select:none">
+        <span class="panel-title">🔧 Diagnóstico <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400;margin-left:0.5rem">(clica para expandir)</span></span>
+      </div>
+      <div class="panel-body hidden" id="diagBody">
+
+        <div style="margin-bottom:1.5rem">
+          <h4 style="font-family:var(--display);font-weight:500;font-size:0.9rem;margin-bottom:0.7rem;color:var(--text)">Teste de Conexão RPC</h4>
+          <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.8rem">Verifica se a app consegue ligar a cada rede e ler a tua posição AAVE.</p>
+          <button class="btn btn-gold btn-sm" onclick="runConnectionTest()">▶ Testar Conexão</button>
+          <div id="connTestResults" style="margin-top:0.8rem;font-family:var(--mono);font-size:0.72rem;display:flex;flex-direction:column;gap:0.4rem"></div>
+        </div>
+
+        <div style="height:1px;background:var(--border-soft);margin:1rem 0"></div>
+
+        <div>
+          <h4 style="font-family:var(--display);font-weight:500;font-size:0.9rem;margin-bottom:0.7rem;color:var(--text)">Diagnóstico de Histórico</h4>
+          <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.8rem">Testa directamente as APIs e mostra raw output.</p>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem">
+            <button class="btn btn-gold btn-sm" onclick="testAlchemyAPI('base')">▶ Alchemy (Base)</button>
+            <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('eth')">▶ Alchemy (ETH)</button>
+            <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('arbitrum')">▶ Alchemy (ARB)</button>
+            <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('linea')">▶ Alchemy (Linea)</button>
+            <button class="btn btn-blue btn-sm" onclick="testMorphoAPI()">▶ Morpho</button>
+            <button class="btn btn-blue btn-sm" onclick="testPricesAPI()">▶ Preços</button>
+          </div>
+          <div class="alert alert-info" style="font-size:0.75rem;margin-bottom:0.6rem">
+            <span>ℹ</span><div>Wallet activa: <strong style="color:var(--gold)">${activeWallet()?.addr||'nenhuma'}</strong></div>
+          </div>
+          <div id="histDiagResult" style="font-family:var(--mono);font-size:0.7rem;line-height:1.6;word-break:break-all"></div>
+        </div>
+
       </div>
     </div>
 
-    <div class="panel" style="margin-top:1.3rem">
-      <div class="panel-head"><span class="panel-title">🔍 Diagnóstico de Histórico</span></div>
+    <!-- ── Dados ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head"><span class="panel-title">💾 Dados</span></div>
       <div class="panel-body">
-        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">Testa directamente a API do Basescan e mostra o que foi encontrado.</p>
-        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
-          <button class="btn btn-gold btn-sm" onclick="testAlchemyAPI('base')">▶ Testar Alchemy (Base)</button>
-          <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('eth')">▶ Testar Alchemy (ETH)</button>
-          <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('arbitrum')">▶ Testar Alchemy (ARB)</button>
-          <button class="btn btn-outline btn-sm" onclick="testAlchemyAPI('linea')">▶ Testar Alchemy (Linea)</button>
-          <button class="btn btn-blue btn-sm" onclick="testMorphoAPI()">▶ Debug Morpho</button>
-          <button class="btn btn-blue btn-sm" onclick="testPricesAPI()">▶ Debug Preços</button>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.8rem">Exporta a tua configuração para um ficheiro JSON ou restaura de um backup. Todos os dados ficam no teu browser — nada é enviado para servidores externos.</p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="exportJSON()">📦 Exportar Backup</button>
+          <label class="btn btn-outline btn-sm" style="cursor:pointer">
+            📂 Restaurar JSON
+            <input type="file" accept=".json" style="display:none" onchange="importJSON(event)">
+          </label>
+          <button class="btn btn-danger btn-sm" onclick="clearAll()" style="margin-left:auto">🗑 Apagar Tudo</button>
         </div>
-        <div class="alert alert-info" style="font-size:0.78rem;margin-bottom:0.75rem">
-          <span>ℹ</span><div>Wallet activa: <strong style="color:var(--gold)">${activeWallet()?.addr||'nenhuma'}</strong><br>
-          Se as tuas transacções AAVE foram feitas com outra wallet, adiciona essa wallet nas Wallets e activa-a.</div>
-        </div>
-        <div id="histDiagResult" style="font-family:var(--mono);font-size:0.72rem;line-height:1.7;word-break:break-all"></div>
       </div>
     </div>
 
-
-    <div class="panel" style="margin-top:1.3rem">
-      <div class="panel-head"><span class="panel-title">⚠ Zona de Perigo</span></div>
-      <div class="panel-body" style="display:flex;gap:0.75rem;flex-wrap:wrap">
-        <button class="btn btn-danger btn-sm" onclick="exportJSON()">📦 Backup JSON</button>
-        <label class="btn btn-outline btn-sm" style="cursor:pointer">📂 Restaurar JSON<input type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
-        <button class="btn btn-danger btn-sm" onclick="clearAll()">🗑 Apagar Tudo</button>
+    <!-- ── Sobre ── -->
+    <div class="panel">
+      <div class="panel-head"><span class="panel-title">ℹ️ Sobre o Aurum</span></div>
+      <div class="panel-body">
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:1rem">
+          <svg viewBox="0 0 100 100" width="56" height="56" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="auAboutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#F0D9A8"/><stop offset="55%" stop-color="#D4AF7A"/><stop offset="100%" stop-color="#A88556"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="38" fill="none" stroke="url(#auAboutGrad)" stroke-width="1.2" opacity="0.45"/>
+            <rect x="22" y="22" width="56" height="56" transform="rotate(45 50 50)" fill="none" stroke="url(#auAboutGrad)" stroke-width="0.8" opacity="0.25"/>
+            <g transform="translate(50, 50)">
+              <path d="M -16 19 L -3 -19" stroke="url(#auAboutGrad)" stroke-width="3.4" fill="none" stroke-linecap="square"/>
+              <path d="M 3 -19 L 16 19" stroke="url(#auAboutGrad)" stroke-width="3.4" fill="none" stroke-linecap="square"/>
+              <line x1="-3.5" y1="-19" x2="3.5" y2="-19" stroke="url(#auAboutGrad)" stroke-width="3.4" stroke-linecap="square"/>
+              <line x1="-9" y1="3" x2="9" y2="3" stroke="url(#auAboutGrad)" stroke-width="2.2"/>
+              <line x1="-19" y1="19" x2="-13" y2="19" stroke="url(#auAboutGrad)" stroke-width="3.4" stroke-linecap="square"/>
+              <line x1="13" y1="19" x2="19" y2="19" stroke="url(#auAboutGrad)" stroke-width="3.4" stroke-linecap="square"/>
+            </g>
+          </svg>
+          <div>
+            <div style="font-family:var(--display);font-size:1.3rem;font-weight:600;color:var(--gold);letter-spacing:0.06em">AURUM</div>
+            <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.25em;color:var(--text-muted);margin-top:0.2rem">YOUR DEFI · REFINED</div>
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.6rem">Versão 2.6 · Schema v${state._schemaVersion||3}</div>
+          </div>
+        </div>
+        <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.55">
+          Tracker DeFi pessoal e privado. Dados guardados localmente no teu browser. Sem servidor, sem tracking, sem ads.
+        </div>
       </div>
-    </div>`;
+    </div>
+  `;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -6159,9 +6612,51 @@ function buildWalletDD() {
 }
 
 function toggleWalletDD() {
-  const dd=document.getElementById('walletDD'); if(!dd)return;
-  const isOpen=!dd.classList.contains('hidden');
-  if(isOpen) dd.classList.add('hidden'); else { buildWalletDD(); dd.classList.remove('hidden'); }
+  const dd = document.getElementById('walletDD');
+  const btn = document.getElementById('walletSwitchBtn');
+  if (!dd || !btn) return;
+  const isOpen = !dd.classList.contains('hidden');
+  if (isOpen) {
+    dd.classList.add('hidden');
+    return;
+  }
+  buildWalletDD();
+  dd.classList.remove('hidden');
+  // Smart positioning: anchor to button, prefer right-aligned but flip if overflowing
+  const btnRect = btn.getBoundingClientRect();
+  dd.style.position = 'fixed';
+  dd.style.top = (btnRect.bottom + 8) + 'px';
+  // Try right-aligned to button first
+  const ddWidth = Math.max(dd.offsetWidth, 280);
+  const preferredLeft = btnRect.right - ddWidth;
+  const viewportMargin = 12;
+  if (preferredLeft < viewportMargin) {
+    // Would overflow left → anchor to left edge of button
+    dd.style.left = Math.max(viewportMargin, btnRect.left) + 'px';
+    dd.style.right = 'auto';
+  } else if (btnRect.right + viewportMargin > window.innerWidth) {
+    // Overflowing right (rare) → pin to right edge
+    dd.style.left = 'auto';
+    dd.style.right = viewportMargin + 'px';
+  } else {
+    dd.style.left = preferredLeft + 'px';
+    dd.style.right = 'auto';
+  }
+  // Click outside to close
+  setTimeout(() => {
+    document.addEventListener('click', closeWalletDDOnOutside, { once: true });
+  }, 0);
+}
+function closeWalletDDOnOutside(e) {
+  const dd = document.getElementById('walletDD');
+  const btn = document.getElementById('walletSwitchBtn');
+  if (!dd || dd.classList.contains('hidden')) return;
+  if (dd.contains(e.target) || btn?.contains(e.target)) {
+    // Re-attach for next click outside
+    setTimeout(() => document.addEventListener('click', closeWalletDDOnOutside, { once: true }), 0);
+    return;
+  }
+  dd.classList.add('hidden');
 }
 
 function closeWalletDD() { document.getElementById('walletDD')?.classList.add('hidden'); }
@@ -6170,6 +6665,15 @@ document.addEventListener('click', e=>{ if(!document.getElementById('walletSwitc
 // ══════════════════════════════════════════════════════════
 // SETTINGS ACTIONS
 // ══════════════════════════════════════════════════════════
+
+function savePref(key, value) {
+  const w = activeWallet();
+  if (!w) return;
+  w[key] = value;
+  saveState();
+  toast('Preferência guardada', 'success');
+}
+
 function saveApiKey() {
   const w=activeWallet(); if(!w)return;
   w.apiKey=document.getElementById('set_apikey')?.value?.trim()||'';
@@ -6332,6 +6836,19 @@ function toast(msg, type='info', dur=5000) {
 // BOOT
 // ══════════════════════════════════════════════════════════
 loadState();
+
+// Auto-suggest collateral APY when asset changes
+window.SUGGESTED_APR_CALC = { ETH:0, weETH:3.2, wstETH:2.9, rETH:2.7, cbBTC:0, BTC:0, USDC:0 };
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'calc_asset') {
+    const v = window.SUGGESTED_APR_CALC[e.target.value];
+    const aprInput = document.getElementById('calc_apr_col');
+    if (aprInput && v !== undefined) {
+      aprInput.value = v;
+      updateCalc();
+    }
+  }
+});
 </script>
 <div id="mempoolTooltip" class="mempool-tooltip"></div>
 </body>
