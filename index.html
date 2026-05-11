@@ -1588,55 +1588,11 @@ td.mono:hover { opacity: 1 !important; }
   border-color: rgba(212,175,122,0.3);
 }
 
+
 /* ══════════════════════════════════════════════════
-   STEALTH MODE — blur monetary values
+   STEALTH MODE — minimal badge (no filter, no blur)
    ══════════════════════════════════════════════════ */
-body.stealth-mode .stat-value,
-body.stealth-mode .stat-sub,
-body.stealth-mode .sim-auto-value,
-body.stealth-mode .calc-card-value,
-body.stealth-mode .calc-card-sub,
-body.stealth-mode .value-display,
-body.stealth-mode .value-num,
-body.stealth-mode .hf-pill,
-body.stealth-mode td.mono.gold,
-body.stealth-mode td.mono.green,
-body.stealth-mode td.mono.red,
-body.stealth-mode .mono.gold,
-body.stealth-mode .mempool-block-top,
-body.stealth-mode .mempool-tooltip-value,
-body.stealth-mode .mempool-timeline-bucket-value,
-body.stealth-mode .interest-ticker,
-body.stealth-mode .balance-display,
-body.stealth-mode .fiat-value,
-body.stealth-mode .token-value {
-  filter: blur(7px);
-  transition: filter 220ms var(--easing);
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-body.stealth-mode .stat-value:hover,
-body.stealth-mode .stat-sub:hover,
-body.stealth-mode .sim-auto-value:hover,
-body.stealth-mode .calc-card-value:hover,
-body.stealth-mode .calc-card-sub:hover,
-body.stealth-mode .hf-pill:hover,
-body.stealth-mode td.mono.gold:hover,
-body.stealth-mode td.mono.green:hover,
-body.stealth-mode td.mono.red:hover,
-body.stealth-mode .mono.gold:hover,
-body.stealth-mode .mempool-block-top:hover,
-body.stealth-mode .interest-ticker:hover,
-body.stealth-mode .balance-display:hover,
-body.stealth-mode .value-display:hover {
-  filter: blur(0);
-}
-
-/* Stealth indicator badge on tabs */
-body.stealth-mode::before {
-  content: '🕶 STEALTH';
+.stealth-badge {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
@@ -1650,7 +1606,10 @@ body.stealth-mode::before {
   color: var(--gold);
   z-index: 9998;
   pointer-events: none;
-  backdrop-filter: blur(10px);
+  display: none;
+}
+body.stealth-mode .stealth-badge {
+  display: block;
 }
 </style>
 </head>
@@ -2976,13 +2935,80 @@ function showTab(tab) {
   render();
 }
 
+
+// ─────────────────────────────────────────────────
+// STEALTH MODE — DOM post-processing (no CSS filter)
+// ─────────────────────────────────────────────────
+function isStealthMode() {
+  const w = activeWallet();
+  return !!(w && w.stealthMode);
+}
+
+// Apply stealth: walk specific selectors, replace numeric content with •••
+function applyStealthMode() {
+  const on = isStealthMode();
+  document.body.classList.toggle('stealth-mode', on);
+
+  // Selectors that contain money values to mask
+  const SELECTORS = [
+    '.stat-value',
+    '.sim-auto-value',
+    '.calc-card-value',
+    '.mempool-tooltip-value',
+    '.mempool-timeline-bucket-value',
+    '.hf-pill',
+    'td.mono.gold',
+    'td.mono.green',
+    'td.mono.red',
+    '.interest-ticker',
+    '.balance-display',
+  ];
+
+  SELECTORS.forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => {
+      if (on) {
+        // Store original text once
+        if (el.dataset.stealthOriginal == null) {
+          el.dataset.stealthOriginal = el.innerHTML;
+        }
+        // Replace digits with bullets, keep currency symbols and structure
+        const original = el.dataset.stealthOriginal;
+        el.innerHTML = original.replace(/[\d.,]+/g, m => '•'.repeat(Math.min(5, m.replace(/[.,]/g, '').length || 3)));
+        el.style.cursor = 'pointer';
+        el.title = 'Clica para revelar (3s)';
+        // Click to reveal temporarily
+        if (!el._stealthBound) {
+          el._stealthBound = true;
+          el.addEventListener('click', function() {
+            if (this.dataset.stealthOriginal != null) {
+              const orig = this.dataset.stealthOriginal;
+              this.innerHTML = orig;
+              setTimeout(() => {
+                if (isStealthMode() && this.dataset.stealthOriginal != null) {
+                  this.innerHTML = this.dataset.stealthOriginal.replace(/[\d.,]+/g, m => '•'.repeat(Math.min(5, m.replace(/[.,]/g, '').length || 3)));
+                }
+              }, 3000);
+            }
+          });
+        }
+      } else {
+        // Restore
+        if (el.dataset.stealthOriginal != null) {
+          el.innerHTML = el.dataset.stealthOriginal;
+          delete el.dataset.stealthOriginal;
+        }
+        el.style.cursor = '';
+        el.title = '';
+      }
+    });
+  });
+}
+
 function render() {
   const mc = document.getElementById('mainContent');
   if (!mc) return;
   try {
     const w = activeWallet();
-    // Apply stealth mode class to body
-    document.body.classList.toggle('stealth-mode', !!(w && w.stealthMode));
     if (!state.wallets.length || !w) { mc.innerHTML = renderSetup(); return; }
     const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
     mc.innerHTML = `<div class="tab-content">${(renders[currentTab]||renderDashboard)(w)}</div>`;
@@ -3004,6 +3030,7 @@ function afterRender() {
   if (currentTab === 'simulator') initSimulator();
   if (currentTab === 'dashboard') startInterestTicker();
   else stopInterestTicker();
+  applyStealthMode();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -6724,11 +6751,10 @@ function savePref(key, value) {
   if (!w) return;
   w[key] = value;
   saveState();
-  // Apply visual effects immediately
   if (key === 'stealthMode') {
-    document.body.classList.toggle('stealth-mode', !!value);
+    applyStealthMode();
   }
-  toast('Preferência guardada · ' + (key === 'stealthMode' ? (value ? 'Stealth activo' : 'Stealth inactivo') : key), 'success');
+  toast('Preferência guardada' + (key === 'stealthMode' ? ' · ' + (value ? 'Stealth activo' : 'Stealth inactivo') : ''), 'success');
 }
 
 function saveApiKey() {
@@ -6908,5 +6934,6 @@ document.addEventListener('change', function(e) {
 });
 </script>
 <div id="mempoolTooltip" class="mempool-tooltip"></div>
+<div class="stealth-badge">🕶 STEALTH</div>
 </body>
 </html>
