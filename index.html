@@ -4610,7 +4610,12 @@ function renderCards(w) {
   const allTxs = state.txs.filter(t=>t.walletId===w.id&&(activeCardId==='all'||t.cardId===activeCardId));
   const txs = allTxs.filter(isLikelyRealSpend);
   const totalSpend = txs.reduce((s,t)=>s+(+t.amount||0),0);
-  const cashback = txs.reduce((s,t)=>s+(+t.cashback||0),0);
+  // FIX: cashback comes from reward lots in state.collateral (post-classifier system)
+  // PLUS legacy cashback field for old imports
+  const rewardLots = (state.collateral || []).filter(c => c.walletId === w.id && c.origin === 'reward');
+  const cashbackFromLots = rewardLots.reduce((s, c) => s + (+c.eur || 0), 0);
+  const cashbackLegacy = txs.reduce((s,t)=>s+(+t.cashback||0),0);
+  const cashback = cashbackFromLots + cashbackLegacy;
   const byCat = {};
   txs.forEach(t=>{ byCat[t.category]=(byCat[t.category]||0)+(+t.amount||0); });
   const excludedCount = allTxs.length - txs.length;
@@ -7306,6 +7311,23 @@ function previewImport() {
 }
 
 function saveImport() {
+  // Tax-aware delegation: if issuer recognized, route through new flow
+  const _fmtSel = document.getElementById('imp_format')?.value || 'auto';
+  const _cardId = document.getElementById('imp_card_id')?.value || '';
+  let _issuerId = (_fmtSel === 'auto')
+    ? detectIssuerFromImport(pendingImport?.filename, pendingImport?.headers)
+    : (ISSUER_ADAPTERS[_fmtSel] ? _fmtSel : null);
+  if (_issuerId && _cardId && pendingImport) {
+    // Need to ensure the batch is classified first
+    if (!window._taxAwareBatch) {
+      // User clicked Import without Preview — auto-classify first
+      previewImportTaxAware(_issuerId, _cardId);
+      toast('Pré-visualização gerada — confirma para importar', 'info');
+      return;
+    }
+    return confirmTaxAwareImport();
+  }
+  // Fallback: original generic save below
   if (!pendingImport) return;
   const fmt = document.getElementById('imp_format')?.value || 'auto';
   const colMap = (fmt === 'generic' || !window._colMap) ? {
@@ -7408,6 +7430,30 @@ function saveImport() {
   render();
 }
 
+
+
+// ═══════════════════════════════════════════════════════════
+// Bulk cleanup: remove all imports + their txs for active wallet
+// ═══════════════════════════════════════════════════════════
+function clearAllImports() {
+  const w = activeWallet();
+  if (!w) { toast('Sem wallet activa', 'warn'); return; }
+  const walletImports = state.imports.filter(i => i.walletId === w.id);
+  const txCount = state.txs.filter(t => t.walletId === w.id).length;
+  if (walletImports.length === 0 && txCount === 0) {
+    toast('Sem imports ou transações para limpar', 'info');
+    return;
+  }
+  if (!confirm('Vais apagar ' + walletImports.length + ' imports e ' + txCount + ' transações associadas. Esta acção não pode ser revertida. Continuar?')) {
+    return;
+  }
+  state.txs = state.txs.filter(t => t.walletId !== w.id);
+  state.imports = state.imports.filter(i => i.walletId !== w.id);
+  saveState();
+  toast('✓ ' + walletImports.length + ' imports e ' + txCount + ' transações apagadas', 'success');
+  render();
+}
+window.clearAllImports = clearAllImports;
 
 function deleteImport(importId) {
   if (!confirm('Remover este import e todas as suas transações?')) return;
