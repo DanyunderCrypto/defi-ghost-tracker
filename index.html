@@ -1222,16 +1222,16 @@ td.muted  { color:var(--muted); }
 .mempool-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.2rem 1rem;
-  padding: 1.5rem 1rem 1rem;
+  gap: 1.2rem 0.6rem;
+  padding: 2rem 1.5rem 1.5rem;
   background:
     linear-gradient(180deg, rgba(212,175,122,0.02), transparent),
     var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
-  min-height: 200px;
+  min-height: 240px;
   align-items: flex-end;
-  perspective: 1200px;
+  justify-content: flex-start;
 }
 
 .mempool-empty {
@@ -1246,58 +1246,24 @@ td.muted  { color:var(--muted); }
 .mempool-block {
   position: relative;
   cursor: pointer;
-  transition: transform 240ms var(--easing);
-  transform-style: preserve-3d;
-  transform: rotateX(55deg) rotateZ(-45deg);
-  margin: 1rem;
+  transition: transform 220ms var(--easing), filter 220ms;
+  margin: 0.6rem 0.8rem;
+  display: inline-block;
 }
 .mempool-block:hover {
-  transform: rotateX(55deg) rotateZ(-45deg) translateZ(20px) scale(1.05);
+  transform: translateY(-5px) scale(1.04);
+  filter: drop-shadow(0 14px 16px rgba(0,0,0,0.5));
   z-index: 10;
 }
-
-.mempool-block-top {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  background: var(--blockColor, #444);
-  border: 1px solid rgba(255,255,255,0.15);
-  box-shadow:
-    inset 0 0 0 1px rgba(255,255,255,0.08),
-    inset 0 -10px 20px rgba(0,0,0,0.2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+.mempool-block svg {
+  display: block;
 }
 
-.mempool-block-side {
-  position: absolute;
-  background: var(--blockSideColor, #222);
-  border: 1px solid rgba(0,0,0,0.3);
-}
-.mempool-block-right {
-  top: 0;
-  right: 0;
-  width: var(--blockDepth, 20px);
-  height: 100%;
-  transform-origin: left center;
-  transform: rotateY(90deg) translateX(var(--blockDepth, 20px));
-  filter: brightness(0.7);
-}
-.mempool-block-bottom {
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: var(--blockDepth, 20px);
-  transform-origin: center top;
-  transform: rotateX(-90deg) translateY(var(--blockDepth, 20px));
-  filter: brightness(0.5);
-}
+
+
+
+
+
 
 /* Tooltip on hover */
 .mempool-tooltip {
@@ -1497,8 +1463,8 @@ td.mono:hover { opacity: 1 !important; }
 
 .mempool-block-count {
   position: absolute;
-  top: -8px;
-  right: -8px;
+  top: -10px;
+  right: -10px;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -1620,6 +1586,71 @@ td.mono:hover { opacity: 1 !important; }
 .calc-card.featured {
   background: linear-gradient(180deg, rgba(212,175,122,0.08), rgba(212,175,122,0.02));
   border-color: rgba(212,175,122,0.3);
+}
+
+/* ══════════════════════════════════════════════════
+   STEALTH MODE — blur monetary values
+   ══════════════════════════════════════════════════ */
+body.stealth-mode .stat-value,
+body.stealth-mode .stat-sub,
+body.stealth-mode .sim-auto-value,
+body.stealth-mode .calc-card-value,
+body.stealth-mode .calc-card-sub,
+body.stealth-mode .value-display,
+body.stealth-mode .value-num,
+body.stealth-mode .hf-pill,
+body.stealth-mode td.mono.gold,
+body.stealth-mode td.mono.green,
+body.stealth-mode td.mono.red,
+body.stealth-mode .mono.gold,
+body.stealth-mode .mempool-block-top,
+body.stealth-mode .mempool-tooltip-value,
+body.stealth-mode .mempool-timeline-bucket-value,
+body.stealth-mode .interest-ticker,
+body.stealth-mode .balance-display,
+body.stealth-mode .fiat-value,
+body.stealth-mode .token-value {
+  filter: blur(7px);
+  transition: filter 220ms var(--easing);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.stealth-mode .stat-value:hover,
+body.stealth-mode .stat-sub:hover,
+body.stealth-mode .sim-auto-value:hover,
+body.stealth-mode .calc-card-value:hover,
+body.stealth-mode .calc-card-sub:hover,
+body.stealth-mode .hf-pill:hover,
+body.stealth-mode td.mono.gold:hover,
+body.stealth-mode td.mono.green:hover,
+body.stealth-mode td.mono.red:hover,
+body.stealth-mode .mono.gold:hover,
+body.stealth-mode .mempool-block-top:hover,
+body.stealth-mode .interest-ticker:hover,
+body.stealth-mode .balance-display:hover,
+body.stealth-mode .value-display:hover {
+  filter: blur(0);
+}
+
+/* Stealth indicator badge on tabs */
+body.stealth-mode::before {
+  content: '🕶 STEALTH';
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  padding: 0.4rem 0.85rem;
+  background: rgba(212,175,122,0.12);
+  border: 1px solid rgba(212,175,122,0.35);
+  border-radius: 999px;
+  color: var(--gold);
+  z-index: 9998;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
 }
 </style>
 </head>
@@ -2950,6 +2981,8 @@ function render() {
   if (!mc) return;
   try {
     const w = activeWallet();
+    // Apply stealth mode class to body
+    document.body.classList.toggle('stealth-mode', !!(w && w.stealthMode));
     if (!state.wallets.length || !w) { mc.innerHTML = renderSetup(); return; }
     const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
     mc.innerHTML = `<div class="tab-content">${(renders[currentTab]||renderDashboard)(w)}</div>`;
@@ -4333,13 +4366,45 @@ function renderStrategy(w) {
               const depth = mempoolBlockDepth(c._held, size);
               const colors = mempoolBlockColors(c._status);
               const lotJson = JSON.stringify({id:c.id, asset:c.asset, eur:c.eur, qty:c.qty, acqDate:c.acqDate, chain:c.chain, txhash:(c.txhashes&&c.txhashes[0])||c.txhash||'', _count:c._count||1, txCount:(c.txhashes||[]).length}).replace(/"/g,'&quot;');
+              // SVG isometric cube — clean 3D look
+              // Use square face (base size) + depth for height
+              const baseW = size;
+              const depthH = depth;
+              // SVG viewBox calculated to fit the iso projection
+              // Isometric: 30° angle. Width on screen = baseW * cos(30) * 2 ≈ baseW * 1.732
+              // Height on screen = baseW * sin(30) * 2 + depthH ≈ baseW + depthH
+              const svgW = Math.round(baseW * 1.732);
+              const svgH = Math.round(baseW + depthH);
+              const halfW = svgW/2;
+              const topY = 0;
+              const midY = baseW/2;
+              const botY = baseW;
+              // Top face (rhombus): center top → right → center mid → left → back to top
+              const topPath = `M ${halfW},${topY} L ${svgW},${midY} L ${halfW},${botY} L 0,${midY} Z`;
+              // Right face (parallelogram): right top edge → down depth → diagonal back
+              const rightPath = `M ${svgW},${midY} L ${svgW},${midY+depthH} L ${halfW},${botY+depthH} L ${halfW},${botY} Z`;
+              // Left face (parallelogram): left bottom → down → right
+              const leftPath = `M 0,${midY} L 0,${midY+depthH} L ${halfW},${botY+depthH} L ${halfW},${botY} Z`;
+              // Label position: center of top face
+              const labelText = (+c.eur>=1000) ? (+c.eur/1000).toFixed(1)+'k' : Math.round(+c.eur||0);
+              const labelSize = Math.max(10, Math.min(18, baseW/7));
+
               return `<div class="mempool-block"
-                style="width:${size}px;height:${size}px;--blockColor:${colors.top};--blockSideColor:${colors.side};--blockDepth:${depth}px"
+                style="width:${svgW}px;height:${svgH}px"
                 onmousemove="mempoolShowTooltip(event, ${lotJson})"
                 onmouseleave="mempoolHideTooltip()">
-                <div class="mempool-block-top">€${(+c.eur>=1000)?(+c.eur/1000).toFixed(1)+'k':Math.round(+c.eur||0)}${c._count>1?`<span class="mempool-block-count">${c._count}</span>`:''}</div>
-                <div class="mempool-block-side mempool-block-right"></div>
-                <div class="mempool-block-side mempool-block-bottom"></div>
+                <svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" style="overflow:visible">
+                  <!-- Front face (left in iso view) -->
+                  <path d="${leftPath}" fill="${colors.side}" stroke="rgba(0,0,0,0.3)" stroke-width="0.5"/>
+                  <!-- Right face (darker) -->
+                  <path d="${rightPath}" fill="${colors.top}" stroke="rgba(0,0,0,0.3)" stroke-width="0.5" style="filter:brightness(0.7)"/>
+                  <!-- Top face -->
+                  <path d="${topPath}" fill="${colors.top}" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
+                  <!-- Label on top face -->
+                  <text x="${halfW}" y="${midY+labelSize/3}" text-anchor="middle"
+                    style="font-family:var(--mono);font-size:${labelSize}px;font-weight:700;fill:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5);pointer-events:none">€${labelText}</text>
+                </svg>
+                ${c._count>1?`<span class="mempool-block-count">${c._count}</span>`:''}
               </div>`;
             }).join('') : '<div class="mempool-empty">Nenhum lote corresponde ao filtro.</div>'}
           </div>
@@ -4599,7 +4664,7 @@ function renderSimulator(w) {
   `;
 }
 
-function initSimulator() { updateSim(); updateCalc(); startInterestTickerSim(); }
+function initSimulator() { updateSim(); updateCalc(); }
 
 function updateSim() {
   const sel = document.getElementById('sim_pos');
@@ -4760,18 +4825,6 @@ function startInterestTicker() {
     interestAnimId = requestAnimationFrame(tick);
   }
   cancelAnimationFrame(interestAnimId);
-  tick();
-}
-
-function startInterestTickerSim() {
-  const perSec = calcPerSecondInterest();
-  let base = calcTotalInterest(), startTs = Date.now();
-  function tick() {
-    if (!el) return;
-    const current = base + perSec*((Date.now()-startTs)/1000);
-    el.textContent = '$'+current.toFixed(8);
-    requestAnimationFrame(tick);
-  }
   tick();
 }
 
@@ -6671,7 +6724,11 @@ function savePref(key, value) {
   if (!w) return;
   w[key] = value;
   saveState();
-  toast('Preferência guardada', 'success');
+  // Apply visual effects immediately
+  if (key === 'stealthMode') {
+    document.body.classList.toggle('stealth-mode', !!value);
+  }
+  toast('Preferência guardada · ' + (key === 'stealthMode' ? (value ? 'Stealth activo' : 'Stealth inactivo') : key), 'success');
 }
 
 function saveApiKey() {
