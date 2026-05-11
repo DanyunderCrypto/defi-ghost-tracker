@@ -1886,6 +1886,126 @@ body.stealth-mode .stealth-badge {
     margin: 0;
   }
 }
+
+/* ══════════════════════════════════════════════════
+   FASE 6A: Card Tax Setup wizard
+   ══════════════════════════════════════════════════ */
+.tax-funding-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.tax-funding-opt {
+  display: block;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: 1.5px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: var(--trans);
+}
+.tax-funding-opt:hover {
+  border-color: rgba(212,175,122,0.4);
+  background: var(--surface-elev);
+}
+.tax-funding-opt.selected {
+  border-color: var(--gold);
+  background: rgba(212,175,122,0.05);
+  box-shadow: 0 0 0 1px rgba(212,175,122,0.15) inset;
+}
+
+.tax-funding-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.tax-funding-head strong {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.tax-funding-radio {
+  font-size: 1rem;
+  color: var(--gold);
+  width: 16px;
+  display: inline-block;
+}
+
+.tax-funding-badge {
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  background: rgba(212,175,122,0.12);
+  border: 1px solid rgba(212,175,122,0.3);
+  color: var(--gold);
+  border-radius: 999px;
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.tax-funding-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+  padding-left: 1.5rem;
+}
+.tax-funding-desc strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.tax-funding-desc em {
+  color: var(--gold);
+  font-style: italic;
+}
+
+.tax-loan-opt {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-bottom: 0.4rem;
+  transition: var(--trans);
+}
+.tax-loan-opt:hover {
+  border-color: rgba(212,175,122,0.3);
+}
+.tax-loan-opt input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--gold);
+}
+
+/* Card tax-status indicator on the card list */
+.card-tax-status {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  z-index: 5;
+  border: 1px solid;
+  backdrop-filter: blur(8px);
+}
+.card-tax-status.own     { background:rgba(0,232,158,0.15); color:#00E89E; border-color:rgba(0,232,158,0.35) }
+.card-tax-status.loan    { background:rgba(123,111,255,0.18); color:#9D94FF; border-color:rgba(123,111,255,0.4) }
+.card-tax-status.mixed   { background:rgba(212,175,122,0.18); color:#D4AF7A; border-color:rgba(212,175,122,0.4) }
+.card-tax-status.unknown { background:rgba(255,92,122,0.18); color:#FF7A92; border-color:rgba(255,92,122,0.4) }
 </style>
 </head>
 <body>
@@ -2048,6 +2168,33 @@ body.stealth-mode .stealth-badge {
 </div>
 
 <!-- IMPORT CSV/XLSX -->
+
+<div class="modal-overlay hidden" id="modalCardTaxSetup">
+<div class="modal" style="max-width:640px">
+  <div class="modal-head">
+    <span class="modal-title">⚖️ Setup Fiscal do Cartão</span>
+    <button class="btn-ghost" onclick="closeCardTaxSetup()">✕</button>
+  </div>
+  <div class="modal-body">
+
+    <div class="alert alert-info" style="margin-bottom:1.2rem;font-size:0.78rem;line-height:1.5">
+      <span>ℹ</span>
+      <div>
+        <strong>Porquê é importante:</strong> A forma como financias este cartão muda completamente o tratamento fiscal dos teus gastos em sede de IRS (Categoria G, Anexo G/G1).<br>
+        Esta configuração é guardada por cartão e pode ser alterada depois.
+      </div>
+    </div>
+
+    <div id="cardTaxSetupBody"></div>
+
+  </div>
+  <div class="modal-foot" style="display:flex;gap:0.5rem;justify-content:flex-end">
+    <button class="btn btn-outline btn-sm" onclick="closeCardTaxSetup()">Cancelar</button>
+    <button class="btn btn-gold btn-sm" onclick="saveCardTaxSetup()">Guardar e continuar →</button>
+  </div>
+</div>
+</div>
+
 <div class="modal-overlay hidden" id="modalImport">
 <div class="modal" style="max-width:660px">
   <div class="modal-head"><span class="modal-title">Importar Transações</span><button class="btn-ghost" onclick="closeModal('modalImport')">✕</button></div>
@@ -2724,12 +2871,26 @@ let interestTimer = null;
 // ══════════════════════════════════════════════════════════
 async function loadState() {
   // C2: Schema versioning
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 4;
   // Migrations applied in order. Each gets the state and returns migrated state.
   const MIGRATIONS = {
     1: (s) => { s.imports = s.imports || []; return s; },
     2: (s) => { s.cards = s.cards || []; return s; },
     3: (s) => { s.morphoUserMarkets = s.morphoUserMarkets || {}; return s; },
+    4: (s) => {
+      // Add tax-treatment fields to existing cards (default: 'unknown' → forces setup)
+      s.cards = (s.cards || []).map(c => ({
+        ...c,
+        defaultFundingSource: c.defaultFundingSource || 'unknown',
+        linkedLoanProtocols: c.linkedLoanProtocols || [],
+        primaryAsset: c.primaryAsset || (c.network === 'gnosis' ? 'EURe' : 'USDC'),
+        setupCompleted: c.setupCompleted !== undefined ? c.setupCompleted : false,
+      }));
+      // Initialize new arrays for tax tracking
+      s.cardTopups = s.cardTopups || [];
+      s.cardSpends = s.cardSpends || [];
+      return s;
+    },
   };
   // Will run after state is loaded below
 
@@ -4183,7 +4344,20 @@ function renderCards(w) {
   const topCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const walletImports = state.imports.filter(i=>i.walletId===w.id&&(activeCardId==='all'||i.cardId===activeCardId));
 
-  return `
+  return `${(()=>{
+      const walletCards = state.cards.filter(c => c.walletId === w.id);
+      const needsSetup = walletCards.filter(c => !c.setupCompleted || c.defaultFundingSource === 'unknown');
+      if (needsSetup.length === 0) return '';
+      return `<div class="alert alert-warn" style="margin-bottom:1.2rem">
+        <span>⚠</span>
+        <div>
+          <strong>${needsSetup.length} ${needsSetup.length===1?'cartão precisa':'cartões precisam'} de setup fiscal.</strong>
+          O tratamento fiscal dos teus gastos depende desta configuração — essencial para um relatório IRS correcto.<br>
+          ${needsSetup.map(c => `<a href="#" onclick="event.preventDefault();openCardTaxSetup('${c.id}');return false" style="color:var(--gold);text-decoration:underline;margin-right:0.5rem">${c.name}</a>`).join(' · ')}
+        </div>
+      </div>`;
+    })()}
+
     <div class="section-row">
       <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
         <div class="section-label">Cartões</div>
@@ -4478,6 +4652,13 @@ function renderCardVisual(card) {
   return `
     <div class="card-real" onclick="this.classList.toggle('flipped')">
       <button class="card-delete" onclick="event.stopPropagation();deleteCard('${card.id}')" title="Eliminar">✕</button>
+      <button class="card-delete" style="right:2.2rem;width:auto;padding:0 0.5rem;font-size:0.55rem;letter-spacing:0.15em" onclick="event.stopPropagation();openCardTaxSetup('${card.id}')" title="Setup fiscal">⚖</button>
+      ${(()=>{
+        const f = card.defaultFundingSource || 'unknown';
+        const labels = { own:'PRÓPRIO', loan:'CRÉDITO', mixed:'MISTO', unknown:'⚠ SETUP' };
+        const lbl = labels[f] || labels.unknown;
+        return `<div class="card-tax-status ${f}" onclick="event.stopPropagation();openCardTaxSetup('${card.id}')" style="cursor:pointer">${lbl}</div>`;
+      })()}
       <div class="card-flipper">
         ${frontHTML}
         ${backHTML}
@@ -7040,13 +7221,254 @@ function deleteCollateral(id) {
 // ══════════════════════════════════════════════════════════
 // CARD CRUD
 // ══════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────
+// FASE 6A: Card Tax Setup Wizard
+// ─────────────────────────────────────────────────
+window.currentSetupCardId = null;
+
+function openCardTaxSetup(cardId) {
+  window.currentSetupCardId = cardId;
+  const card = state.cards.find(c => c.id === cardId);
+  if (!card) { toast('Cartão não encontrado','warn'); return; }
+
+  // Collect available loan protocols (Morpho + AAVE positions of active wallet)
+  const w = activeWallet();
+  const availableLoans = [];
+
+  // Morpho positions
+  const morpho = live.positions['morpho'];
+  if (morpho?.positions?.length) {
+    morpho.positions.forEach((p, idx) => {
+      if (p.borrowUsd > 0) {
+        availableLoans.push({
+          id: 'morpho_' + idx,
+          protocol: 'morpho',
+          label: `Morpho · ${p.colSym}/${p.loanSym} (${p.chain})`,
+          asset: p.loanSym,
+          market: p.marketId || p.chain,
+        });
+      }
+    });
+  }
+
+  // AAVE positions
+  ['eth','base','arbitrum','linea','optimism','polygon'].forEach(chainKey => {
+    const p = live.positions[chainKey];
+    if (p && p.totalDebt > 0) {
+      availableLoans.push({
+        id: 'aave_' + chainKey,
+        protocol: 'aave',
+        label: `AAVE V3 · ${CHAINS[chainKey]?.name || chainKey}`,
+        asset: 'USDC',  // most common
+        market: chainKey,
+      });
+    }
+  });
+
+  // Issuer-aware suggested primary asset
+  const ISSUER_DEFAULTS = {
+    etherfi:  { primaryAsset: 'USDC', recommendation: 'mixed', hint: 'Suporta USDC, USDT, WETH, liquidETH' },
+    metamask: { primaryAsset: 'USDC', recommendation: 'own', hint: 'Suporta USDC, USDT, WETH, AAVE, LINK' },
+    gnosis:   { primaryAsset: 'EURe', recommendation: 'own', hint: 'Stablecoin EURe — tratamento fiscal muito simplificado (~zero mais-valias)' },
+    kast:     { primaryAsset: 'USDC', recommendation: 'own', hint: 'Stablecoin USDC/USDT' },
+    redotpay: { primaryAsset: 'USDT', recommendation: 'own', hint: 'Stablecoin USDT' },
+    tria:     { primaryAsset: 'USDC', recommendation: 'own', hint: 'Stablecoin USDC/USDT' },
+    nexo:     { primaryAsset: 'USDT', recommendation: 'mixed', hint: 'Suporta BTC, ETH, USDT, NEXO' },
+    wirex:    { primaryAsset: 'USDT', recommendation: 'mixed', hint: 'Suporta BTC, ETH, USDT, WXT' },
+    bybit:    { primaryAsset: 'USDT', recommendation: 'mixed', hint: 'Suporta USDT, BTC, ETH' },
+    outro:    { primaryAsset: 'USDC', recommendation: 'own', hint: '' },
+  };
+  const def = ISSUER_DEFAULTS[card.issuer] || ISSUER_DEFAULTS.outro;
+  const currentFunding = card.defaultFundingSource || 'unknown';
+  const currentPrimary = card.primaryAsset || def.primaryAsset;
+  const currentLinked = card.linkedLoanProtocols || [];
+
+  const body = document.getElementById('cardTaxSetupBody');
+  body.innerHTML = `
+    <div style="margin-bottom:1rem">
+      <div class="form-label" style="margin-bottom:0.6rem">Cartão</div>
+      <div style="padding:0.6rem 0.9rem;background:var(--surface-elev);border-radius:var(--radius);border:1px solid var(--border-soft);font-family:var(--mono);font-size:0.8rem">
+        <strong style="color:var(--gold)">${card.name}</strong>
+        <span style="opacity:0.6;margin-left:0.5rem">· ${CARD_ISSUERS[card.issuer]?.name || card.issuer}</span>
+      </div>
+      ${def.hint ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;font-style:italic">${def.hint}</div>` : ''}
+    </div>
+
+    <div style="margin-bottom:1.2rem">
+      <div class="form-label" style="margin-bottom:0.6rem">Asset principal usado neste cartão</div>
+      <select class="form-select" id="taxSetup_primaryAsset">
+        <option value="USDC" ${currentPrimary==='USDC'?'selected':''}>USDC</option>
+        <option value="USDT" ${currentPrimary==='USDT'?'selected':''}>USDT</option>
+        <option value="EURe" ${currentPrimary==='EURe'?'selected':''}>EURe (Gnosis Pay)</option>
+        <option value="EURC" ${currentPrimary==='EURC'?'selected':''}>EURC</option>
+        <option value="DAI" ${currentPrimary==='DAI'?'selected':''}>DAI</option>
+        <option value="WETH" ${currentPrimary==='WETH'?'selected':''}>WETH / ETH</option>
+        <option value="WBTC" ${currentPrimary==='WBTC'?'selected':''}>WBTC / cbBTC</option>
+        <option value="OTHER" ${currentPrimary==='OTHER'?'selected':''}>Outro / Múltiplos</option>
+      </select>
+      <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.35rem">Será usado por defeito; cada transação pode ter o seu próprio asset.</div>
+    </div>
+
+    <div style="margin-bottom:1rem">
+      <div class="form-label" style="margin-bottom:0.6rem">Fonte de fundos</div>
+      <div class="tax-funding-options">
+
+        <label class="tax-funding-opt ${currentFunding==='own'?'selected':''}" onclick="selectTaxFunding('own')">
+          <input type="radio" name="taxFunding" value="own" ${currentFunding==='own'?'checked':''} style="display:none">
+          <div class="tax-funding-head">
+            <span class="tax-funding-radio">${currentFunding==='own'?'●':'○'}</span>
+            <strong>Compra própria</strong>
+          </div>
+          <div class="tax-funding-desc">
+            Compraste o cripto (com fiat ou através de swap) e gastas-o através do cartão.<br>
+            <strong>Cada gasto = alienação fiscal</strong> (Categoria G, Anexo G ou G1).
+          </div>
+        </label>
+
+        <label class="tax-funding-opt ${currentFunding==='loan'?'selected':''}" onclick="selectTaxFunding('loan')">
+          <input type="radio" name="taxFunding" value="loan" ${currentFunding==='loan'?'checked':''} style="display:none">
+          <div class="tax-funding-head">
+            <span class="tax-funding-radio">${currentFunding==='loan'?'●':'○'}</span>
+            <strong>Crédito DeFi</strong>
+            <span class="tax-funding-badge">recomendado para users com colateral</span>
+          </div>
+          <div class="tax-funding-desc">
+            O cripto que está no cartão veio de empréstimos contra colateral (Morpho/AAVE).<br>
+            <strong>Cada gasto = saída de capital emprestado, sem evento fiscal.</strong><br>
+            O capital próprio (colateral) continua a ser teu até liquidação.
+          </div>
+        </label>
+
+        <label class="tax-funding-opt ${currentFunding==='mixed'?'selected':''}" onclick="selectTaxFunding('mixed')">
+          <input type="radio" name="taxFunding" value="mixed" ${currentFunding==='mixed'?'checked':''} style="display:none">
+          <div class="tax-funding-head">
+            <span class="tax-funding-radio">${currentFunding==='mixed'?'●':'○'}</span>
+            <strong>Misto</strong>
+          </div>
+          <div class="tax-funding-desc">
+            Combinação dos dois. Vais classificar cada <em>topup</em> individualmente.<br>
+            Cada gasto herda o tratamento do topup que o originou.
+          </div>
+        </label>
+
+      </div>
+    </div>
+
+    <div id="taxLinkedLoansSection" style="margin-bottom:1rem;${currentFunding==='own'?'display:none':''}">
+      <div class="form-label" style="margin-bottom:0.6rem">Empréstimos ligados a este cartão</div>
+      ${availableLoans.length === 0 ? `
+        <div class="alert alert-warn" style="font-size:0.78rem">
+          <span>⚠</span>
+          <div>Nenhum empréstimo DeFi detectado na wallet activa. Faz <strong>Refresh</strong> de dados primeiro ou regista posições manualmente nos protocolos.</div>
+        </div>
+      ` : availableLoans.map(loan => `
+        <label class="tax-loan-opt">
+          <input type="checkbox" id="taxLoan_${loan.id}" value="${loan.id}" ${currentLinked.includes(loan.id)?'checked':''}>
+          <div>
+            <div style="font-weight:500">${loan.label}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);font-family:var(--mono)">Asset emprestado: ${loan.asset}</div>
+          </div>
+        </label>
+      `).join('')}
+      <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.5rem">
+        Selecciona todos os empréstimos cujos fundos podem entrar neste cartão (via topup, bridge, etc).
+      </div>
+    </div>
+  `;
+
+  // Store reference for later access
+  window._taxSetupAvailableLoans = availableLoans;
+  window._taxSetupCurrentFunding = currentFunding;
+
+  document.getElementById('modalCardTaxSetup').classList.remove('hidden');
+}
+
+function selectTaxFunding(value) {
+  window._taxSetupCurrentFunding = value;
+  // Update visual state
+  document.querySelectorAll('.tax-funding-opt').forEach(el => {
+    el.classList.remove('selected');
+    const radio = el.querySelector('.tax-funding-radio');
+    if (radio) radio.textContent = '○';
+  });
+  const selected = document.querySelector(`.tax-funding-opt input[value="${value}"]`)?.closest('.tax-funding-opt');
+  if (selected) {
+    selected.classList.add('selected');
+    const r = selected.querySelector('.tax-funding-radio');
+    if (r) r.textContent = '●';
+  }
+  // Toggle linked loans section visibility
+  const sec = document.getElementById('taxLinkedLoansSection');
+  if (sec) sec.style.display = (value === 'own') ? 'none' : 'block';
+}
+
+function saveCardTaxSetup() {
+  const cardId = window.currentSetupCardId;
+  if (!cardId) return;
+  const card = state.cards.find(c => c.id === cardId);
+  if (!card) return;
+
+  const funding = window._taxSetupCurrentFunding || 'own';
+  const primary = document.getElementById('taxSetup_primaryAsset')?.value || 'USDC';
+
+  // Collect linked loans
+  const linked = [];
+  if (funding !== 'own') {
+    (window._taxSetupAvailableLoans || []).forEach(loan => {
+      const cb = document.getElementById('taxLoan_' + loan.id);
+      if (cb && cb.checked) linked.push(loan.id);
+    });
+  }
+
+  card.defaultFundingSource = funding;
+  card.primaryAsset = primary;
+  card.linkedLoanProtocols = linked;
+  card.setupCompleted = true;
+
+  saveState();
+  closeCardTaxSetup();
+  toast('Configuração fiscal guardada ✓', 'success');
+  render();
+}
+
+function closeCardTaxSetup() {
+  document.getElementById('modalCardTaxSetup').classList.add('hidden');
+  window.currentSetupCardId = null;
+}
+
 function saveCard() {
   const w = activeWallet();
   const name = document.getElementById('card_name')?.value?.trim();
   if (!name) { toast('Nome do cartão obrigatório','warn'); return; }
-  state.cards.push({ id:genId(), walletId:w.id, name, type:document.getElementById('card_type')?.value||'debit', issuer:document.getElementById('card_issuer')?.value||'outro', network:document.getElementById('card_network')?.value||'eth', color:document.getElementById('card_color')?.value||'#1a1a2e' });
-  saveState(); closeModal('modalCard');
-  toast('Cartão adicionado ✓','success'); render();
+  const newId = genId();
+  const issuer = document.getElementById('card_issuer')?.value || 'outro';
+  // Default primary asset based on issuer
+  const ISSUER_DEFAULT_ASSET = {
+    etherfi:'USDC', metamask:'USDC', gnosis:'EURe', kast:'USDC',
+    redotpay:'USDT', tria:'USDC', nexo:'USDT', wirex:'USDT',
+    bybit:'USDT', outro:'USDC',
+  };
+  state.cards.push({
+    id: newId,
+    walletId: w.id,
+    name,
+    type: document.getElementById('card_type')?.value || 'debit',
+    issuer,
+    network: document.getElementById('card_network')?.value || 'eth',
+    color: document.getElementById('card_color')?.value || '#1a1a2e',
+    // FASE 6A: tax-treatment fields
+    defaultFundingSource: 'unknown',
+    linkedLoanProtocols: [],
+    primaryAsset: ISSUER_DEFAULT_ASSET[issuer] || 'USDC',
+    setupCompleted: false,
+  });
+  saveState();
+  closeModal('modalCard');
+  toast('Cartão adicionado ✓ — agora vamos ao setup fiscal','success');
+  render();
+  // Open tax setup wizard
+  setTimeout(() => openCardTaxSetup(newId), 250);
 }
 
 function deleteCard(id) {
