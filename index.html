@@ -4652,7 +4652,7 @@ function updateSimAuto() {
   }
   if (!sp) { out.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem">Selecciona uma posição válida.</div>'; return; }
 
-  const liqThreshPct = sp.proto === 'aave' ? sp.liqThresh : sp.liqThresh*100;
+  const liqThreshPct = sp.liqThresh;
   const requiredCol = sp.debt / (liqThreshPct/100);
   const dropAllowed = sp.collateral > 0 ? Math.max(0, (sp.collateral - requiredCol) / sp.collateral) * 100 : 0;
   const valueAtRisk = sp.collateral * (dropAllowed/100);
@@ -4689,7 +4689,7 @@ function updateSimAuto() {
         <div class="sim-auto-value">${sp.hf ? sp.hf.toFixed(3) : '—'}</div>
         <div class="sim-auto-sub">
           Liquidação quando HF &lt; 1.000 ·
-          ${sp.proto==='aave'?'LTV<sub>liq</sub> '+sp.liqThresh.toFixed(0)+'%':'LLTV '+(sp.liqThresh*100).toFixed(0)+'%'}
+          ${sp.proto==='aave'?'LTV<sub>liq</sub> '+sp.liqThresh.toFixed(0)+'%':'LLTV '+sp.liqThresh.toFixed(0)+'%'}
         </div>
       </div>
     </div>
