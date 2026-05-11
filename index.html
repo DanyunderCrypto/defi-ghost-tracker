@@ -4520,7 +4520,7 @@ function renderStrategy(w) {
 // SIMULATOR TAB
 // ══════════════════════════════════════════════════════════
 function renderSimulator(w) {
-  // Collect ALL active positions across all protocols
+  // Collect ALL active positions across all protocols (used to populate the <select>)
   const simPositions = [];
   Object.entries(live.positions).forEach(([key, p]) => {
     if (key === 'morpho') {
@@ -4531,11 +4531,7 @@ function renderSimulator(w) {
               id: 'morpho_'+idx,
               label: `Morpho · ${m.colSym}/${m.loanSym} (${m.chain})`,
               proto: 'morpho',
-              collateral: m.collateralUsd,
-              debt: m.borrowUsd,
               hf: m.hf,
-              liqThresh: m.lltv,
-              source: m,
             });
           }
         });
@@ -4545,69 +4541,10 @@ function renderSimulator(w) {
         id: 'aave_'+key,
         label: `AAVE V3 · ${CHAINS[key]?.name||key}`,
         proto: 'aave',
-        collateral: p.totalCollateral,
-        debt: p.totalDebt,
         hf: p.hf,
-        liqThresh: (p.liqThreshold||8000)/100,
-        source: p,
       });
     }
   });
-
-  // Compute automatic safety analysis for first position
-  let autoCards = '';
-  if (simPositions.length) {
-    const sp = simPositions[0];
-    const liqThreshPct = sp.proto === 'aave' ? sp.liqThresh : sp.liqThresh*100;
-    // Liquidation happens when: collateral * (liqThresh/100) = debt
-    // → required collateral = debt / (liqThresh/100)
-    // → drop allowed = (collateral - required) / collateral
-    const requiredCol = sp.debt / (liqThreshPct/100);
-    const dropAllowed = sp.collateral > 0 ? Math.max(0, (sp.collateral - requiredCol) / sp.collateral) * 100 : 0;
-    const valueAtRisk = sp.collateral * (dropAllowed/100);
-    const liqPrice = sp.collateral - valueAtRisk;
-    const bufferLevel = dropAllowed >= 50 ? 'safe' : dropAllowed >= 30 ? 'caution' : dropAllowed >= 15 ? 'warning' : 'danger';
-    const bufferColor = { safe:'var(--green)', caution:'var(--gold)', warning:'var(--amber)', danger:'var(--red)' }[bufferLevel];
-    const bufferLabel = { safe:'SEGURO', caution:'ATENÇÃO', warning:'ALERTA', danger:'CRÍTICO' }[bufferLevel];
-
-    autoCards = `
-      <div class="sim-auto-grid">
-        <div class="sim-auto-card sim-auto-buffer" style="--accent:${bufferColor}">
-          <div class="sim-auto-label">Buffer de Segurança</div>
-          <div class="sim-auto-value">
-            <span style="color:${bufferColor}">−${dropAllowed.toFixed(1)}<span class="currency-symbol">%</span></span>
-          </div>
-          <div class="sim-auto-sub">O preço do colateral pode cair <strong style="color:${bufferColor}">${dropAllowed.toFixed(1)}%</strong> antes da liquidação</div>
-          <div class="sim-auto-badge" style="background:${bufferColor}22;color:${bufferColor};border-color:${bufferColor}66">${bufferLabel}</div>
-        </div>
-
-        <div class="sim-auto-card">
-          <div class="sim-auto-label">Valor em Risco</div>
-          <div class="sim-auto-value">
-            <span class="currency-symbol">$</span>${fmt(valueAtRisk, 0)}
-          </div>
-          <div class="sim-auto-sub">Quanto perderias se o preço caísse até ao limite de liquidação</div>
-        </div>
-
-        <div class="sim-auto-card">
-          <div class="sim-auto-label">Colateral · Limite</div>
-          <div class="sim-auto-value">
-            <span class="currency-symbol">$</span>${fmt(liqPrice, 0)}
-          </div>
-          <div class="sim-auto-sub">Valor do colateral no momento da liquidação (debt ÷ LTV<sub>liq</sub>)</div>
-        </div>
-
-        <div class="sim-auto-card">
-          <div class="sim-auto-label">Health Factor Atual</div>
-          <div class="sim-auto-value">${sp.hf ? sp.hf.toFixed(3) : '—'}</div>
-          <div class="sim-auto-sub">
-            Liquidação quando HF &lt; 1.000 ·
-            ${sp.proto==='aave'?'LTV<sub>liq</sub> '+sp.liqThresh.toFixed(0)+'%':'LLTV '+(sp.liqThresh*100).toFixed(0)+'%'}
-          </div>
-        </div>
-      </div>
-    `;
-  }
 
   return `
     <div class="section-row"><div class="section-label">Simulador de Liquidação Multi-Protocolo</div></div>
@@ -4620,7 +4557,7 @@ function renderSimulator(w) {
         </select>
       </div>
       <div class="panel-body">
-        ${simPositions.length === 0 ? '<div class="alert alert-info"><span>ℹ</span><div>Sem posições activas para simular. Faz Refresh primeiro.</div></div>' : autoCards}
+        ${simPositions.length === 0 ? '<div class="alert alert-info"><span>ℹ</span><div>Sem posições activas para simular. Faz Refresh primeiro.</div></div>' : '<div id="simAutoCards"></div>'}
       </div>
     </div>
 
@@ -4693,7 +4630,78 @@ function renderSimulator(w) {
 
 function initSimulator() { updateSim(); updateCalc(); }
 
+
+function updateSimAuto() {
+  const sel = document.getElementById('sim_pos');
+  const out = document.getElementById('simAutoCards');
+  if (!sel || !out) return;
+
+  // Resolve current selected position
+  const posId = sel.value;
+  let sp = null;
+  if (posId && posId.startsWith('aave_')) {
+    const chainKey = posId.slice(5);
+    const p = live.positions[chainKey];
+    if (p && p.totalCollateral > 0) {
+      sp = { proto:'aave', collateral:p.totalCollateral, debt:p.totalDebt, hf:p.hf, liqThresh:(p.liqThreshold||8000)/100 };
+    }
+  } else if (posId && posId.startsWith('morpho_')) {
+    const idx = parseInt(posId.slice(7));
+    const m = live.positions['morpho']?.positions?.[idx];
+    if (m) sp = { proto:'morpho', collateral:m.collateralUsd, debt:m.borrowUsd, hf:m.hf, liqThresh:m.lltv };
+  }
+  if (!sp) { out.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem">Selecciona uma posição válida.</div>'; return; }
+
+  const liqThreshPct = sp.proto === 'aave' ? sp.liqThresh : sp.liqThresh*100;
+  const requiredCol = sp.debt / (liqThreshPct/100);
+  const dropAllowed = sp.collateral > 0 ? Math.max(0, (sp.collateral - requiredCol) / sp.collateral) * 100 : 0;
+  const valueAtRisk = sp.collateral * (dropAllowed/100);
+  const liqPrice = sp.collateral - valueAtRisk;
+  const bufferLevel = dropAllowed >= 50 ? 'safe' : dropAllowed >= 30 ? 'caution' : dropAllowed >= 15 ? 'warning' : 'danger';
+  const bufferColor = { safe:'var(--green)', caution:'var(--gold)', warning:'var(--amber)', danger:'var(--red)' }[bufferLevel];
+  const bufferLabel = { safe:'SEGURO', caution:'ATENÇÃO', warning:'ALERTA', danger:'CRÍTICO' }[bufferLevel];
+
+  out.innerHTML = `
+    <div class="sim-auto-grid">
+      <div class="sim-auto-card sim-auto-buffer" style="--accent:${bufferColor}">
+        <div class="sim-auto-label">Buffer de Segurança</div>
+        <div class="sim-auto-value">
+          <span style="color:${bufferColor}">−${dropAllowed.toFixed(1)}<span class="currency-symbol">%</span></span>
+        </div>
+        <div class="sim-auto-sub">O preço do colateral pode cair <strong style="color:${bufferColor}">${dropAllowed.toFixed(1)}%</strong> antes da liquidação</div>
+        <div class="sim-auto-badge" style="background:${bufferColor}22;color:${bufferColor};border-color:${bufferColor}66">${bufferLabel}</div>
+      </div>
+
+      <div class="sim-auto-card">
+        <div class="sim-auto-label">Valor em Risco</div>
+        <div class="sim-auto-value"><span class="currency-symbol">$</span>${fmt(valueAtRisk, 0)}</div>
+        <div class="sim-auto-sub">Quanto perderias se o preço caísse até ao limite de liquidação</div>
+      </div>
+
+      <div class="sim-auto-card">
+        <div class="sim-auto-label">Colateral · Limite</div>
+        <div class="sim-auto-value"><span class="currency-symbol">$</span>${fmt(liqPrice, 0)}</div>
+        <div class="sim-auto-sub">Valor do colateral no momento da liquidação (debt ÷ LTV<sub>liq</sub>)</div>
+      </div>
+
+      <div class="sim-auto-card">
+        <div class="sim-auto-label">Health Factor Atual</div>
+        <div class="sim-auto-value">${sp.hf ? sp.hf.toFixed(3) : '—'}</div>
+        <div class="sim-auto-sub">
+          Liquidação quando HF &lt; 1.000 ·
+          ${sp.proto==='aave'?'LTV<sub>liq</sub> '+sp.liqThresh.toFixed(0)+'%':'LLTV '+(sp.liqThresh*100).toFixed(0)+'%'}
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Re-apply stealth on the newly inserted cards
+  if (typeof applyStealthMode === 'function') applyStealthMode();
+}
+
 function updateSim() {
+  // Always refresh the automatic analysis cards when position changes
+  updateSimAuto();
   const sel = document.getElementById('sim_pos');
   if (!sel) return;
   const drop = +document.getElementById('sim_drop')?.value || 0;
