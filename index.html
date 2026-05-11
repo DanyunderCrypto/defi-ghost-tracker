@@ -83,6 +83,7 @@
   --easing:       cubic-bezier(0.4, 0, 0.2, 1);
   --duration:     240ms;
   --duration-fast: 140ms;
+  --num: "JetBrains Mono", "SF Mono", Menlo, monospace;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 14px; scroll-behavior: smooth; }
@@ -847,40 +848,38 @@ td.muted  { color:var(--muted); }
 
 .crypto-symbol {
   position: absolute;
-  font-family: var(--display);
-  font-weight: 400;
-  color: rgba(212, 175, 122, 0.06);
+  font-family: var(--num);
+  font-weight: 600;
+  color: rgba(212, 175, 122, 0.18);
   user-select: none;
-  bottom: -10%;
-  animation: floatUp linear infinite;
-  text-shadow: 0 0 30px rgba(212, 175, 122, 0.04);
-  will-change: transform, opacity;
+  animation: matrixFade ease-in-out infinite;
+  text-shadow: 0 0 20px currentColor;
+  will-change: opacity, filter, transform;
 }
 
-@keyframes floatUp {
-  0% {
-    transform: translateY(0) translateX(0) rotate(0deg);
-    opacity: 0;
-  }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% {
-    transform: translateY(-115vh) translateX(20px) rotate(8deg);
-    opacity: 0;
-  }
+@keyframes matrixFade {
+  /* Long invisible phase + brief shimmer + slow fade away */
+  0%   { opacity: 0; filter: brightness(1); transform: scale(0.95); }
+  8%   { opacity: 0.05; filter: brightness(1.4); transform: scale(1); }
+  10%  { opacity: 1; filter: brightness(2); }
+  12%  { opacity: 0.85; filter: brightness(1); }
+  45%  { opacity: 0.85; filter: brightness(1); }
+  60%  { opacity: 0.3; filter: brightness(1); }
+  80%  { opacity: 0; filter: brightness(1); }
+  100% { opacity: 0; filter: brightness(1); transform: scale(0.95); }
 }
 
 /* Individual symbol positions, sizes, speeds, delays */
-.crypto-symbol:nth-child(1)  { left: 5%;   font-size: 4rem;   animation-duration: 38s; animation-delay: 0s;    color: rgba(212,175,122,0.05); }
-.crypto-symbol:nth-child(2)  { left: 15%;  font-size: 2.5rem; animation-duration: 32s; animation-delay: -8s;   color: rgba(123,111,255,0.05); }
-.crypto-symbol:nth-child(3)  { left: 25%;  font-size: 3rem;   animation-duration: 45s; animation-delay: -3s;   color: rgba(212,175,122,0.04); }
-.crypto-symbol:nth-child(4)  { left: 35%;  font-size: 5rem;   animation-duration: 50s; animation-delay: -15s;  color: rgba(245,245,240,0.04); }
-.crypto-symbol:nth-child(5)  { left: 45%;  font-size: 2rem;   animation-duration: 28s; animation-delay: -22s;  color: rgba(212,175,122,0.06); }
-.crypto-symbol:nth-child(6)  { left: 55%;  font-size: 3.5rem; animation-duration: 42s; animation-delay: -10s;  color: rgba(0,232,158,0.04); }
-.crypto-symbol:nth-child(7)  { left: 65%;  font-size: 2.8rem; animation-duration: 35s; animation-delay: -18s;  color: rgba(123,111,255,0.05); }
-.crypto-symbol:nth-child(8)  { left: 75%;  font-size: 4.5rem; animation-duration: 48s; animation-delay: -5s;   color: rgba(212,175,122,0.04); }
-.crypto-symbol:nth-child(9)  { left: 85%;  font-size: 3.2rem; animation-duration: 36s; animation-delay: -26s;  color: rgba(245,245,240,0.03); }
-.crypto-symbol:nth-child(10) { left: 92%;  font-size: 2.5rem; animation-duration: 30s; animation-delay: -12s;  color: rgba(212,175,122,0.05); }
+.crypto-symbol:nth-child(1) { left: 8%; top: 12%; font-size: 2.5rem; animation-delay: 0s; animation-duration: 18s; color: rgba(247,147,26,0.22); }
+.crypto-symbol:nth-child(2) { left: 88%; top: 8%; font-size: 2rem; animation-delay: 3s; animation-duration: 22s; color: rgba(98,126,234,0.22); }
+.crypto-symbol:nth-child(3) { left: 15%; top: 78%; font-size: 1.8rem; animation-delay: 6s; animation-duration: 16s; color: rgba(212,175,122,0.18); }
+.crypto-symbol:nth-child(4) { left: 92%; top: 65%; font-size: 2.2rem; animation-delay: 9s; animation-duration: 20s; color: rgba(212,175,122,0.18); }
+.crypto-symbol:nth-child(5) { left: 45%; top: 25%; font-size: 1.6rem; animation-delay: 2s; animation-duration: 24s; color: rgba(20,241,149,0.22); }
+.crypto-symbol:nth-child(6) { left: 72%; top: 45%; font-size: 2.8rem; animation-delay: 5s; animation-duration: 19s; color: rgba(247,147,26,0.20); }
+.crypto-symbol:nth-child(7) { left: 28%; top: 55%; font-size: 1.6rem; animation-delay: 11s; animation-duration: 21s; color: rgba(98,126,234,0.20); }
+.crypto-symbol:nth-child(8) { left: 60%; top: 88%; font-size: 2rem; animation-delay: 7s; animation-duration: 17s; color: rgba(212,175,122,0.16); }
+.crypto-symbol:nth-child(9) { left: 38%; top: 40%; font-size: 2.4rem; animation-delay: 13s; animation-duration: 23s; color: rgba(20,241,149,0.18); }
+.crypto-symbol:nth-child(10) { left: 80%; top: 30%; font-size: 1.8rem; animation-delay: 1s; animation-duration: 25s; color: rgba(98,126,234,0.22); }
 
 /* Reduced motion accessibility */
 @media (prefers-reduced-motion: reduce) {
@@ -1517,9 +1516,9 @@ td.mono:hover { opacity: 1 !important; }
 }
 
 .sim-auto-value {
-  font-family: var(--display);
-  font-size: 2rem;
-  font-weight: 600;
+  font-family: var(--num);
+  font-size: 1.8rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -1568,9 +1567,9 @@ td.mono:hover { opacity: 1 !important; }
   margin-bottom: 0.45rem;
 }
 .calc-card-value {
-  font-family: var(--display);
-  font-size: 1.3rem;
-  font-weight: 600;
+  font-family: var(--num);
+  font-size: 1.25rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 .calc-card-sub {
@@ -1651,11 +1650,11 @@ body.stealth-mode .stealth-badge {
   font-weight: 500;
 }
 .hero-value {
-  font-family: var(--display);
-  font-size: clamp(2.5rem, 5vw, 3.8rem);
-  font-weight: 600;
+  font-family: var(--num);
+  font-size: clamp(2.4rem, 4.8vw, 3.6rem);
+  font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.04em;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
@@ -1728,9 +1727,9 @@ body.stealth-mode .stealth-badge {
   margin-bottom: 0.35rem;
 }
 .hero-mini-value {
-  font-family: var(--display);
-  font-size: 1.7rem;
-  font-weight: 500;
+  font-family: var(--num);
+  font-size: 1.5rem;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text);
   letter-spacing: -0.01em;
@@ -1783,9 +1782,9 @@ body.stealth-mode .stealth-badge {
   margin-bottom: 0.7rem;
 }
 .metric-value {
-  font-family: var(--display);
-  font-size: 1.9rem;
-  font-weight: 600;
+  font-family: var(--num);
+  font-size: 1.75rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
   line-height: 1.05;
