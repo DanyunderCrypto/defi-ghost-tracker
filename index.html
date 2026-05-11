@@ -1611,6 +1611,279 @@ td.mono:hover { opacity: 1 !important; }
 body.stealth-mode .stealth-badge {
   display: block;
 }
+
+/* ══════════════════════════════════════════════════
+   R5: Dashboard refinement — hero + metric grid
+   ══════════════════════════════════════════════════ */
+
+/* HERO BLOCK */
+.hero-block {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 0;
+  background:
+    radial-gradient(ellipse at top left, rgba(212,175,122,0.04), transparent 60%),
+    var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg, 14px);
+  overflow: hidden;
+  position: relative;
+}
+.hero-block::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, transparent 60%, rgba(212,175,122,0.025));
+}
+
+.hero-main {
+  padding: 2.2rem 2.4rem 2rem;
+  position: relative;
+}
+.hero-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.85rem;
+  font-weight: 500;
+}
+.hero-value {
+  font-family: var(--display);
+  font-size: clamp(2.5rem, 5vw, 3.8rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.hero-value .currency-symbol {
+  font-size: 0.5em;
+  vertical-align: 0.45em;
+  color: var(--gold);
+  margin-right: 0.15em;
+  font-weight: 400;
+  opacity: 0.85;
+}
+.hero-delta {
+  margin-top: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+.hero-delta.positive {
+  background: rgba(0,232,158,0.08);
+  border-color: rgba(0,232,158,0.25);
+  color: var(--green);
+}
+.hero-delta.negative {
+  background: rgba(255,92,122,0.08);
+  border-color: rgba(255,92,122,0.25);
+  color: var(--red);
+}
+.hero-delta.neutral {
+  background: rgba(255,255,255,0.03);
+  border-color: var(--border-soft);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.hero-delta-arrow {
+  font-weight: 700;
+  font-size: 0.9em;
+}
+.hero-delta-pct {
+  opacity: 0.85;
+}
+.hero-delta-period {
+  font-size: 0.85em;
+  opacity: 0.6;
+  margin-left: 0.3rem;
+}
+
+.hero-side {
+  padding: 2.2rem 2rem 2rem;
+  background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(0,0,0,0.05));
+  border-left: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.hero-mini-stat {
+  padding: 0.4rem 0;
+}
+.hero-mini-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+.hero-mini-value {
+  font-family: var(--display);
+  font-size: 1.7rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+.hero-mini-value .currency-symbol {
+  font-size: 0.6em;
+  vertical-align: 0.3em;
+  color: var(--gold);
+  margin-right: 0.1em;
+  opacity: 0.7;
+}
+.hero-mini-sub {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  margin-top: 0.3rem;
+  letter-spacing: 0.05em;
+}
+.hero-mini-divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 0.6rem 0;
+}
+
+/* METRICS GRID (4 cards) */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+.metric-card {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 1.3rem 1.2rem;
+  transition: transform 200ms var(--easing), border-color 200ms;
+}
+.metric-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(212,175,122,0.2);
+}
+.metric-label {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.7rem;
+}
+.metric-value {
+  font-family: var(--display);
+  font-size: 1.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+  color: var(--text);
+}
+.metric-value.muted { color: var(--text-muted); opacity: 0.5; }
+.metric-value .currency-symbol {
+  font-size: 0.55em;
+  vertical-align: 0.35em;
+  color: var(--gold);
+  margin-right: 0.1em;
+  opacity: 0.7;
+  font-weight: 400;
+}
+.metric-sup {
+  font-size: 0.55em;
+  color: var(--text-muted);
+  margin-left: 0.15em;
+  font-weight: 400;
+}
+.metric-sub {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.4rem;
+  letter-spacing: 0.05em;
+}
+.metric-badge {
+  display: inline-block;
+  margin-top: 0.55rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+/* LOT SUGGESTIONS BANNER */
+.lot-sug-banner {
+  margin-bottom: 1.5rem;
+  padding: 0.95rem 1.3rem;
+  background: linear-gradient(135deg, rgba(212,175,122,0.10), rgba(212,175,122,0.04));
+  border: 1px solid rgba(212,175,122,0.25);
+  border-radius: var(--radius-md);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* DASHBOARD FOOTER */
+.dashboard-footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-soft);
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.dashboard-footer strong {
+  color: var(--gold);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-footer .footer-divider {
+  opacity: 0.4;
+}
+
+/* MOBILE: hero stacks */
+@media (max-width: 720px) {
+  .hero-block {
+    grid-template-columns: 1fr;
+  }
+  .hero-side {
+    border-left: none;
+    border-top: 1px solid var(--border-soft);
+    padding: 1.5rem 2rem;
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+  .hero-mini-divider {
+    width: 1px;
+    height: auto;
+    margin: 0;
+  }
+}
 </style>
 </head>
 <body>
@@ -2962,6 +3235,13 @@ function applyStealthMode() {
     'td.mono.red',
     '.interest-ticker',
     '.balance-display',
+    '.hero-value',
+    '.hero-mini-value',
+    '.hero-mini-sub',
+    '.hero-delta-value',
+    '.hero-delta-pct',
+    '.metric-value',
+    '.metric-sub',
   ];
 
   SELECTORS.forEach(sel => {
@@ -3070,8 +3350,60 @@ function saveFirstWallet() {
 // ══════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────
+// R5: Daily snapshot system for 24h delta tracking
+// ─────────────────────────────────────────────────
+const SNAPSHOTS_KEY = 'aurumSnapshots_v1';
+const SNAPSHOTS_MAX = 30; // keep last 30 days
+
+function loadSnapshots() {
+  try {
+    return JSON.parse(localStorage.getItem(SNAPSHOTS_KEY) || '[]');
+  } catch(e) { return []; }
+}
+
+function saveSnapshot(netWorth, totalCol, totalDebt) {
+  if (!netWorth && !totalCol) return; // skip empty snapshots
+  const snaps = loadSnapshots();
+  const today = new Date().toISOString().split('T')[0];
+  // Replace today's entry if exists, otherwise append
+  const idx = snaps.findIndex(s => s.date === today);
+  const entry = {
+    date: today,
+    ts: Date.now(),
+    netWorth: +netWorth || 0,
+    col: +totalCol || 0,
+    debt: +totalDebt || 0,
+  };
+  if (idx >= 0) snaps[idx] = entry;
+  else snaps.push(entry);
+  // Keep only last N days
+  while (snaps.length > SNAPSHOTS_MAX) snaps.shift();
+  try { localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(snaps)); } catch(e) {}
+}
+
+function getSnapshotDelta24h(currentNet) {
+  const snaps = loadSnapshots();
+  if (snaps.length < 2) return null;
+  // Find a snapshot from ~24h ago (or oldest if app is new)
+  const now = Date.now();
+  const target = now - 24*3600*1000;
+  // Find closest snapshot before "target"
+  let candidate = null;
+  for (const s of snaps) {
+    if (s.ts <= target) candidate = s;
+  }
+  // Fallback: use oldest snapshot if no 24h-old one
+  if (!candidate && snaps.length >= 2) candidate = snaps[0];
+  if (!candidate || candidate.netWorth === 0) return null;
+  const deltaAbs = currentNet - candidate.netWorth;
+  const deltaPct = (deltaAbs / Math.abs(candidate.netWorth)) * 100;
+  return { abs: deltaAbs, pct: deltaPct, since: candidate.date, hoursAgo: Math.round((now - candidate.ts)/3600000) };
+}
+
 function renderDashboard(w) {
-  // Build unified protocol list - AAVE per chain + Morpho
+  // Build unified protocol list
   const protoEntries = [];
   Object.entries(live.positions).forEach(([key, p]) => {
     if (key === 'morpho') {
@@ -3088,7 +3420,6 @@ function renderDashboard(w) {
   protoEntries.forEach(e => {
     totalCol += e.data.totalCollateral || 0;
     totalDebt += e.data.totalDebt || 0;
-    // For Morpho, check per-market HF
     if (e.proto === 'morpho' && e.data.positions) {
       e.data.positions.forEach(pos => {
         if (pos.hf && (minHF===null || pos.hf<minHF)) minHF = pos.hf;
@@ -3097,50 +3428,119 @@ function renderDashboard(w) {
       if (minHF===null || e.data.hf<minHF) minHF = e.data.hf;
     }
   });
+  const netWorth = totalCol - totalDebt;
   const gLTV = totalCol>0?(totalDebt/totalCol*100):0;
   const cols = state.collateral.filter(c=>c.walletId===w.id);
-  const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365).length;
-  const totalCardSpend = state.txs.filter(t=>t.walletId===w.id).reduce((s,t)=>s+(+t.amount||0),0);
-  const totalInterest = calcTotalInterest();
-  const hfColor = !minHF?'var(--muted)':minHF<1.2?'var(--red)':minHF<1.5?'var(--gold)':'var(--green)';
+  const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365);
+  const isentoEur = isentos.reduce((s,c)=>s+(+c.eur||0),0);
+  const hfColor = !minHF?'var(--text-muted)':minHF<1.2?'var(--red)':minHF<1.5?'var(--gold)':'var(--green)';
+  const hfBadge = !minHF?'—':minHF<1.2?'CRÍTICO':minHF<1.5?'ATENÇÃO':'SAUDÁVEL';
+
+  // Save snapshot for delta tracking
+  if (totalCol > 0 || totalDebt > 0) saveSnapshot(netWorth, totalCol, totalDebt);
+  const delta = getSnapshotDelta24h(netWorth);
+
+  // Find next upcoming exemption
+  const pending = cols.filter(c=>daysHeld(c.acqDate)<365)
+    .map(c=>({...c, daysLeft: 365-daysHeld(c.acqDate)}))
+    .sort((a,b)=>a.daysLeft-b.daysLeft);
+  const nextExempt = pending[0];
 
   const alertHTML = minHF!==null&&minHF<1.2
-    ? `<div class="alert alert-danger">⚠️ <strong>LIQUIDAÇÃO EM RISCO — HF ${minHF.toFixed(3)}</strong> Adiciona colateral ou reduz dívida imediatamente.</div>`
+    ? `<div class="alert alert-danger" style="margin-bottom:1.5rem">⚠️ <strong>LIQUIDAÇÃO EM RISCO — HF ${minHF.toFixed(3)}</strong> Adiciona colateral ou reduz dívida imediatamente.</div>`
     : minHF!==null&&minHF<1.5
-    ? `<div class="alert alert-warn">⚠ Health Factor em atenção (${minHF.toFixed(3)}). Mantém margem de segurança.</div>`
-    : minHF!==null
-    ? `<div class="alert alert-success">✓ Posição saudável (HF ${minHF.toFixed(3)}). Tudo a correr bem.</div>`
-    : `<div class="alert alert-info">◆ A carregar dados on-chain... Clica Refresh ou aguarda o próximo ciclo automático.</div>`;
+    ? `<div class="alert alert-warn" style="margin-bottom:1.5rem">⚠ Health Factor em atenção (${minHF.toFixed(3)}). Mantém margem de segurança.</div>`
+    : minHF===null
+    ? `<div class="alert alert-info" style="margin-bottom:1.5rem">◆ A carregar dados on-chain... Clica Refresh ou aguarda o próximo ciclo automático.</div>`
+    : '';
+
+  const lotSugBanner = (()=>{
+    const sugs = getLotSuggestions();
+    if (sugs.length === 0) return '';
+    const totalUsd = sugs.reduce((s,x)=>s+(x.amountUSD||0),0);
+    return `<div class="lot-sug-banner">
+      <div style="display:flex;align-items:center;gap:0.85rem">
+        <span style="font-size:1.3rem">🤖</span>
+        <div>
+          <div style="font-weight:600;color:var(--text)">${sugs.length} ${sugs.length===1?'supply detectado':'supplies detectados'} sem lote</div>
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.15rem">Valor total: <span class="currency-symbol">$</span>${fmt(totalUsd)} · regista para tirar partido da regra dos 365 dias</div>
+        </div>
+      </div>
+      <button class="btn btn-gold btn-sm" onclick="showTab('strategy');setTimeout(()=>{openModal('modalCollateral');renderLotSuggestions();},150)">→ Registar lotes</button>
+    </div>`;
+  })();
+
+  // Delta indicator HTML
+  const deltaHTML = delta && Math.abs(delta.abs) > 0.5 ? `
+    <div class="hero-delta ${delta.abs>=0?'positive':'negative'}">
+      <span class="hero-delta-arrow">${delta.abs>=0?'↑':'↓'}</span>
+      <span class="hero-delta-value">${delta.abs>=0?'+':'−'}<span class="currency-symbol">$</span>${fmt(Math.abs(delta.abs), 0)}</span>
+      <span class="hero-delta-pct">(${delta.abs>=0?'+':''}${delta.pct.toFixed(2)}%)</span>
+      <span class="hero-delta-period">· ${delta.hoursAgo<48?delta.hoursAgo+'h':Math.round(delta.hoursAgo/24)+'d'}</span>
+    </div>
+  ` : delta ? `<div class="hero-delta neutral"><span>Sem variação significativa nas últimas 24h</span></div>` : `<div class="hero-delta neutral"><span class="hero-delta-period">Recolhendo histórico para mostrar variação 24h…</span></div>`;
 
   return `
     ${alertHTML}
-    ${(()=>{
-      const sugs = getLotSuggestions();
-      if (sugs.length === 0) return '';
-      const totalUsd = sugs.reduce((s,x)=>s+(x.amountUSD||0),0);
-      return `<div class="alert" style="background:rgba(212,175,122,0.10);border:1px solid rgba(212,175,122,0.3);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem">
-        <div style="display:flex;align-items:center;gap:0.75rem">
-          <span style="font-size:1.2rem">🤖</span>
-          <div>
-            <div style="font-weight:600">${sugs.length} ${sugs.length===1?'supply detectado':'supplies detectados'} sem lote</div>
-            <div style="font-size:0.72rem;color:var(--muted)">Valor total: $${fmt(totalUsd)} · regista para tirar partido da regra dos 365 dias</div>
-          </div>
+    ${lotSugBanner}
+
+    <!-- HERO BLOCK -->
+    <div class="hero-block">
+      <div class="hero-main">
+        <div class="hero-label">Net DeFi Position</div>
+        <div class="hero-value">
+          <span class="currency-symbol">$</span>${fmt(netWorth, 2)}
         </div>
-        <button class="btn btn-gold btn-sm" onclick="showTab('strategy');setTimeout(()=>{openModal('modalCollateral');renderLotSuggestions();},150)">→ Registar lotes</button>
-      </div>`;
-    })()}
-    <div class="stats-grid" style="margin:1rem 0">
-      <div class="stat"><div class="stat-label">Health Factor Min.</div><div class="stat-value" style="color:${hfColor}">${minHF!==null?minHF.toFixed(3):'—'}</div><div class="stat-sub">pior entre redes</div></div>
-      <div class="stat"><div class="stat-label">Colateral Total</div><div class="stat-value sv-gold">$${fmt(totalCol)}</div><div class="stat-sub">≈ €${fmt(totalCol*live.eurRate)} · ${protoEntries.length} posições</div></div>
-      <div class="stat"><div class="stat-label">Dívida Total</div><div class="stat-value sv-amber">$${fmt(totalDebt)}</div><div class="stat-sub">LTV ${fmt(gLTV,1)}%</div></div>
-      <div class="stat"><div class="stat-label">Juros a Correr</div><div class="stat-value sv-red" id="interestTicker">$${fmt(totalInterest)}</div><div class="stat-sub">acumulado estimado</div></div>
-      <div class="stat"><div class="stat-label">Gasto Cartões</div><div class="stat-value sv-blue">€${fmt(totalCardSpend)}</div><div class="stat-sub">${state.txs.filter(t=>t.walletId===w.id).length} transações</div></div>
-      <div class="stat"><div class="stat-label">Lotes Isentos</div><div class="stat-value sv-green">${isentos}<span style="font-size:1rem;color:var(--muted)">/${cols.length}</span></div><div class="stat-sub">estratégia 365d PT</div></div>
+        ${deltaHTML}
+      </div>
+      <div class="hero-side">
+        <div class="hero-mini-stat">
+          <div class="hero-mini-label">Colateral</div>
+          <div class="hero-mini-value"><span class="currency-symbol">$</span>${fmt(totalCol, 2)}</div>
+          <div class="hero-mini-sub">≈ €${fmt(totalCol*live.eurRate)}</div>
+        </div>
+        <div class="hero-mini-divider"></div>
+        <div class="hero-mini-stat">
+          <div class="hero-mini-label">Dívida</div>
+          <div class="hero-mini-value"><span class="currency-symbol">$</span>${fmt(totalDebt, 2)}</div>
+          <div class="hero-mini-sub">${protoEntries.length} ${protoEntries.length===1?'posição activa':'posições activas'}</div>
+        </div>
+      </div>
     </div>
 
-    <div class="panel">
+    <!-- KEY METRICS (4 stats) -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Health Factor</div>
+        <div class="metric-value" style="color:${hfColor}">${minHF!==null?minHF.toFixed(3):'—'}</div>
+        <div class="metric-badge" style="background:${hfColor}22;color:${hfColor};border-color:${hfColor}66">${hfBadge}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">LTV Global</div>
+        <div class="metric-value" style="color:${gLTV>80?'var(--red)':gLTV>60?'var(--gold)':'var(--green)'}">${fmt(gLTV,1)}<span class="currency-symbol">%</span></div>
+        <div class="metric-sub">${gLTV<60?'margem confortável':gLTV<80?'a aproximar do limite':'zona perigosa'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Lotes Isentos</div>
+        <div class="metric-value sv-green">${isentos.length}<span class="metric-sup">/${cols.length}</span></div>
+        <div class="metric-sub"><span class="currency-symbol">€</span>${fmt(isentoEur)} livres de IRS</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Próxima Isenção</div>
+        ${nextExempt ? `
+          <div class="metric-value" style="font-size:1.5rem"><span class="currency-symbol">€</span>${fmt(nextExempt.eur)}</div>
+          <div class="metric-sub">${nextExempt.daysLeft}d · ${nextExempt.asset || '—'}</div>
+        ` : `
+          <div class="metric-value muted">—</div>
+          <div class="metric-sub">sem lotes pendentes</div>
+        `}
+      </div>
+    </div>
+
+    <!-- ACTIVE POSITIONS -->
+    <div class="panel" style="margin-top:1.5rem">
       <div class="panel-head">
-        <span class="panel-title">⬡ Posições Activas — Todos os Protocolos</span>
+        <span class="panel-title">Posições Activas — Todos os Protocolos</span>
         <div style="display:flex;gap:0.5rem">
           <button class="btn btn-outline btn-sm" onclick="openModal('modalGhostCard');buildGhostCard()">👻 Ghost Card</button>
         </div>
@@ -3148,23 +3548,24 @@ function renderDashboard(w) {
       <div class="panel-body no-pad">${renderUnifiedPositions()}</div>
     </div>
 
-    <div class="two-col">
+    <!-- UPCOMING + RECENT (single column on mobile, two on desktop) -->
+    <div class="two-col" style="margin-top:1.5rem">
       <div class="panel">
-        <div class="panel-head"><span class="panel-title">⬡ Próximas Isenções (365d)</span></div>
+        <div class="panel-head"><span class="panel-title">Próximas Isenções (365d)</span></div>
         <div class="panel-body">${renderUpcomingExemptions(w)}</div>
       </div>
       <div class="panel">
-        <div class="panel-head"><span class="panel-title">⬡ HF Histórico</span></div>
-        <div class="panel-body">${renderHFChart()}</div>
+        <div class="panel-head"><span class="panel-title">Últimas Transações</span><span class="loader" id="histLoader" style="display:none"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></span></div>
+        <div class="panel-body no-pad"><div class="table-wrap">${renderRecentHistory()}</div></div>
       </div>
     </div>
 
-    <div class="panel">
-      <div class="panel-head"><span class="panel-title">⬡ Últimas Transações (todas as redes)</span><span class="loader" id="histLoader" style="display:none"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></span></div>
-      <div class="panel-body no-pad"><div class="table-wrap">${renderRecentHistory()}</div></div>
-    </div>
-
-    ${live.lastRefresh?`<div style="text-align:right;font-family:var(--mono);font-size:0.6rem;color:var(--muted)">Refresh: ${live.lastRefresh} · USD/EUR: ${live.eurRate}${live.cacheAgeMin>0?` · cache: ${live.cacheAgeMin}min`:''}</div>`:''}
+    ${live.lastRefresh?`<div class="dashboard-footer">
+      <span>Última actualização <strong>${live.lastRefresh}</strong></span>
+      <span class="footer-divider">·</span>
+      <span>USD/EUR <strong>${live.eurRate}</strong></span>
+      ${live.cacheAgeMin>0?`<span class="footer-divider">·</span><span>Cache <strong>${live.cacheAgeMin}min</strong></span>`:''}
+    </div>`:''}
   `;
 }
 
