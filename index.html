@@ -4596,11 +4596,24 @@ function renderProtoDetail(proto, chain, w) {
 // ══════════════════════════════════════════════════════════
 function renderCards(w) {
   const walletCards = state.cards.filter(c=>c.walletId===w.id);
-  const txs = state.txs.filter(t=>t.walletId===w.id&&(activeCardId==='all'||t.cardId===activeCardId));
+  // Heuristic filter for legacy (pre-classifier) imports: exclude obvious non-spends.
+  // Real card spends are typically <€500 and have specific merchant categories.
+  // Topups/bridges/vault ops typically have huge amounts or generic descriptions.
+  const isLikelyRealSpend = (t) => {
+    const amt = +t.amount || 0;
+    if (amt <= 0 || amt > 1000) return false;  // exclude large amounts (likely topups/bridges)
+    const desc = String(t.desc || '').toLowerCase();
+    // Exclude descriptions that look like internal operations
+    if (/topup|deposit|withdrawal|bridge|stargate|liquid|swap|cashback|vault|usdc$|usdt$|weth$|liquideth/i.test(desc)) return false;
+    return true;
+  };
+  const allTxs = state.txs.filter(t=>t.walletId===w.id&&(activeCardId==='all'||t.cardId===activeCardId));
+  const txs = allTxs.filter(isLikelyRealSpend);
   const totalSpend = txs.reduce((s,t)=>s+(+t.amount||0),0);
   const cashback = txs.reduce((s,t)=>s+(+t.cashback||0),0);
   const byCat = {};
   txs.forEach(t=>{ byCat[t.category]=(byCat[t.category]||0)+(+t.amount||0); });
+  const excludedCount = allTxs.length - txs.length;
   const topCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const walletImports = state.imports.filter(i=>i.walletId===w.id&&(activeCardId==='all'||i.cardId===activeCardId));
 
@@ -4631,9 +4644,17 @@ function renderCards(w) {
     </div>
 
     ${!walletCards.length?`<div class="alert alert-info"><span>ℹ</span><div>Ainda sem cartões. Adiciona o primeiro cartão para começar a importar transações.</div></div>`:''}
+    ${excludedCount > 0 ? `<div class="alert alert-warn" style="margin-bottom:1.2rem">
+      <span>⚠</span>
+      <div>
+        <strong>${excludedCount} transações legacy filtradas dos totais</strong> — vêm de imports anteriores ao sistema fiscal correcto e podem incluir topups, bridges, vault ops, etc.<br>
+        Recomendado: clica <strong style="color:var(--gold)">🧹 Limpar tudo</strong> no painel "Histórico de Imports" e re-importa o ficheiro pelo novo fluxo.
+      </div>
+    </div>` : ''}
+    
 
     <div class="stats-grid" style="margin-bottom:1.3rem">
-      <div class="stat"><div class="stat-label">Total Gasto</div><div class="stat-value sv-blue">€${fmt(totalSpend)}</div><div class="stat-sub">${txs.length} transações</div></div>
+      <div class="stat"><div class="stat-label">Total Gasto</div><div class="stat-value sv-blue">€${fmt(totalSpend)}</div><div class="stat-sub">${txs.length} transações${excludedCount > 0 ? ` · ${excludedCount} legacy filtradas` : ""}</div></div>
       <div class="stat"><div class="stat-label">Cashback</div><div class="stat-value sv-green">€${fmt(cashback)}</div><div class="stat-sub">28% PT → €${fmt(cashback*0.28)} imposto</div></div>
       <div class="stat"><div class="stat-label">Cartões Activos</div><div class="stat-value sv-gold">${walletCards.length}</div></div>
       <div class="stat"><div class="stat-label">Imports</div><div class="stat-value sv-muted">${walletImports.length}</div><div class="stat-sub">ficheiros importados</div></div>
@@ -4656,7 +4677,10 @@ function renderCards(w) {
     </div>
 
     ${walletImports.length?`<div class="panel" style="margin-bottom:1.3rem">
-      <div class="panel-head"><span class="panel-title">Histórico de Imports</span></div>
+      <div class="panel-head">
+        <span class="panel-title">Histórico de Imports</span>
+        <button class="btn btn-danger btn-xs" onclick="clearAllImports()" title="Apaga todos os imports e transações antigos (recomendado se importaste antes do sistema fiscal estar activo)">🧹 Limpar tudo</button>
+      </div>
       <div class="panel-body no-pad">
         ${walletImports.map(imp=>{
           const card = state.cards.find(c=>c.id===imp.cardId);
