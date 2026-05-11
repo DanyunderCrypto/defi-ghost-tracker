@@ -2251,6 +2251,16 @@ body.stealth-mode .stealth-badge {
   padding-top: 1rem;
   border-top: 1px solid var(--border-soft);
 }
+
+/* FIX: drop zone drag state */
+.drop-zone.drag-active {
+  border-color: var(--gold);
+  background: rgba(212,175,122,0.08);
+  transform: scale(1.01);
+}
+.drop-zone {
+  transition: var(--trans);
+}
 </style>
 </head>
 <body>
@@ -2460,7 +2470,12 @@ body.stealth-mode .stealth-badge {
     <div class="alert alert-info" id="importHint" style="margin-bottom:1rem;font-size:0.8rem">
       <span>ℹ</span><div>Selecciona o formato do teu cartão para mapeamento automático das colunas.</div>
     </div>
-    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <div class="drop-zone" id="dropZone"
+       onclick="document.getElementById('fileInput').click()"
+       ondragover="event.preventDefault();this.classList.add('drag-active')"
+       ondragleave="this.classList.remove('drag-active')"
+       ondragend="this.classList.remove('drag-active')"
+       ondrop="event.preventDefault();this.classList.remove('drag-active');if(event.dataTransfer.files.length){const f=event.dataTransfer.files[0];const inp=document.getElementById('fileInput');const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;handleImportFile({target:inp});}">
       <span class="drop-zone-icon">📂</span>
       <p style="color:var(--muted);font-size:0.88rem"><strong style="color:var(--gold)">Clica ou arrasta o ficheiro aqui</strong><br>Suporta CSV, XLSX e XLS</p>
       <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleImportFile(event)">
@@ -5341,12 +5356,12 @@ function renderStrategy(w) {
       <div class="panel-body no-pad">
         ${cols.length?`<div class="table-wrap"><table>
           <thead><tr><th>Lote</th><th>Aquisição</th><th>Depósito</th><th>Rede</th><th>Ativo</th><th>Qtd</th><th>Valor EUR</th><th>Dias</th><th>Status</th><th>Isento em</th><th>Protocolo</th><th>Origem</th><th>TX</th><th></th></tr></thead>
-          <tbody>${cols.map((c,i)=>{
+          <tbody>${mempoolGroupLots(cols).map((c,i)=>{
             const held=daysHeld(c.acqDate), isento=held>=365, left=Math.max(0,365-held), pct=Math.min(100,(held/365)*100);
             const iDate=new Date((new Date(c.acqDate+'T12:00:00')).getTime()+365*86400000).toLocaleDateString('pt-PT');
             const chain=CHAINS[c.chain];
             return `<tr>
-              <td style="font-family:var(--mono);color:var(--gold)">L${String(i+1).padStart(2,'0')}</td>
+              <td style="font-family:var(--mono);color:var(--gold)">L${String(i+1).padStart(2,'0')}${c._count>1?`<span style="display:inline-block;margin-left:0.4rem;padding:0.1rem 0.4rem;background:rgba(212,175,122,0.18);border:1px solid rgba(212,175,122,0.35);border-radius:999px;font-size:0.6rem;font-weight:700;color:var(--gold)" title="${c._count} supplies agrupados">${c._count}×</span>`:''}</td>
               <td class="mono">${fmtDate(c.acqDate)}</td>
               <td class="mono muted">${fmtDate(c.depDate)}</td>
               <td><span class="chain-dot" style="background:${chain?.color||'#888'}"></span> <span style="font-size:0.8rem;color:${chain?.color||'#888'}">${chain?.name||c.chain||'—'}</span></td>
@@ -8035,20 +8050,182 @@ function toggleCatDetails(cat) {
   if (chev) chev.textContent = el.classList.contains('hidden') ? '▾' : '▴';
 }
 
-// Stub for confirm — full implementation in next phase
+// ═══════════════════════════════════════════════════════════
+// FASE 6D: Process cashbacks → lots 365d
+// ═══════════════════════════════════════════════════════════
+
 function confirmTaxAwareImport() {
   const batch = window._taxAwareBatch;
-  if (!batch) { toast('Sem dados para importar','warn'); return; }
-  toast('Confirmação a ser implementada na Fase 6D/E','info');
-  // TODO Fase 6D: process cashbacks → create lots
-  // TODO Fase 6E: process expenses → FIFO disposal + state.cardSpends
-  // TODO: process topups → state.cardTopups
-  // For now: just log
-  console.log('[6C] Batch ready to import:', batch);
-  console.log('[6C] Total to process:', batch.byAction.process);
-  console.log('[6C] Total to ignore:', batch.byAction.ignore);
-  console.log('[6C] Total pending:', batch.byAction.pending);
+  const cardId = window._taxAwareCardId;
+  const issuerId = window._taxAwareIssuer;
+  if (!batch || !cardId) { toast('Sem dados para importar', 'warn'); return; }
+
+  const card = state.cards.find(c => c.id === cardId);
+  const w = activeWallet();
+  if (!card || !w) { toast('Cartão ou wallet inválida', 'warn'); return; }
+
+  const results = {
+    cashbackLots: 0,
+    cashbackEUR: 0,
+    cashbackQty: 0,
+    spendsRegistered: 0,
+    topupsRegistered: 0,
+    pendingIgnored: 0,
+    declinedIgnored: 0,
+    duplicateSkipped: 0,
+  };
+
+  // ─────────────────────────────────────────────────
+  // 1. CASHBACKS → group by (date, asset) → state.collateral
+  // ─────────────────────────────────────────────────
+  const cashbacks = (batch.items || []).filter(i => i.classification.category === 'cashback');
+
+  if (cashbacks.length > 0) {
+    // Group by (date YYYY-MM-DD, asset)
+    const groups = {};
+    cashbacks.forEach(item => {
+      const tx = item.tx;
+      // Extract date — handle both Excel date (number) and string
+      let dateStr = '';
+      if (tx.timestamp) {
+        if (typeof tx.timestamp === 'string') {
+          // Try ISO format first
+          const d = new Date(tx.timestamp);
+          if (!isNaN(d.getTime())) dateStr = d.toISOString().slice(0, 10);
+        } else if (typeof tx.timestamp === 'number') {
+          // Excel serial date
+          const d = new Date((tx.timestamp - 25569) * 86400 * 1000);
+          if (!isNaN(d.getTime())) dateStr = d.toISOString().slice(0, 10);
+        } else if (tx.timestamp instanceof Date) {
+          dateStr = tx.timestamp.toISOString().slice(0, 10);
+        }
+      }
+      if (!dateStr) {
+        // Fallback to normalizeDate
+        dateStr = normalizeDate(tx.timestamp) || '';
+      }
+      if (!dateStr) return;
+
+      // Asset: ether.fi cashbacks come in WETH usually
+      // The description often has the asset, or we look at original currency
+      const asset = (tx.description || tx.originalCurrency || card.primaryAsset || 'WETH').toUpperCase();
+      const usdAmount = Math.abs(tx.amount || 0);
+      // Token amount in 'original amount' field if present
+      const tokenQty = Math.abs(tx.originalAmount || tx.amount || 0);
+
+      const key = `${dateStr}|${asset}`;
+      if (!groups[key]) {
+        groups[key] = {
+          date: dateStr,
+          asset,
+          qty: 0,
+          usd: 0,
+          eur: 0,
+          count: 0,
+          txhashes: [],
+        };
+      }
+      const g = groups[key];
+      g.count++;
+      g.usd += usdAmount;
+      // For EUR conversion, use live.eurRate if available (current rate)
+      // Better: each row may have its own ratio. For now use the global rate.
+      const eurRate = live.eurRate || 0.92;
+      g.eur += usdAmount * eurRate;
+      // For qty: if asset is WETH/ETH, we can derive from USD using ETH price
+      // But the Excel may have separate "original amount" in the token
+      g.qty += tokenQty;
+      if (tx.txhash) g.txhashes.push(tx.txhash);
+    });
+
+    // Create lots in state.collateral
+    Object.values(groups).forEach(g => {
+      // Duplicate check: same date + asset + walletId already in state.collateral as reward?
+      const existing = state.collateral.find(c =>
+        c.walletId === w.id &&
+        c.acqDate === g.date &&
+        c.asset === g.asset &&
+        c.origin === 'reward'
+      );
+      if (existing) {
+        results.duplicateSkipped++;
+        return;
+      }
+
+      const lot = {
+        id: genId(),
+        walletId: w.id,
+        acqDate: g.date,
+        depDate: g.date,
+        chain: card.network || 'multi',
+        proto: 'ether.fi cashback',
+        asset: g.asset,
+        qty: g.qty || (g.usd / 3500),  // rough fallback if no qty
+        eur: g.eur,
+        price: g.qty > 0 ? (g.usd / g.qty) : 0,
+        origin: 'reward',  // NEW: distinguishes from fiat_purchase
+        originDetails: { type: 'cashback', issuer: issuerId, count: g.count },
+        txhash: g.txhashes[0] || '',
+        notes: `Cashback ${ISSUER_ADAPTERS[issuerId]?.name || issuerId}${g.count > 1 ? ` (${g.count} agrupados)` : ''}`,
+      };
+      state.collateral.push(lot);
+      results.cashbackLots++;
+      results.cashbackEUR += g.eur;
+      results.cashbackQty += g.qty;
+    });
+  }
+
+  // ─────────────────────────────────────────────────
+  // 2. EXPENSES / TOPUPS → stub for now (Fase 6E)
+  // ─────────────────────────────────────────────────
+  const expenses = (batch.items || []).filter(i => i.classification.category === 'expense' && i.classification.action === 'process');
+  const topups = (batch.items || []).filter(i => i.classification.category === 'topup');
+  // TODO Fase 6E: process expenses → state.cardSpends + FIFO
+  // TODO Fase 6E: process topups → state.cardTopups
+  results.spendsRegistered = expenses.length;  // (just counting for the toast)
+  results.topupsRegistered = topups.length;
+
+  // ─────────────────────────────────────────────────
+  // 3. COUNT IGNORED
+  // ─────────────────────────────────────────────────
+  results.pendingIgnored = (batch.items || []).filter(i => i.classification.action === 'pending').length;
+  results.declinedIgnored = (batch.items || []).filter(i => i.classification.category === 'declined').length;
+
+  // Save & feedback
+  saveState();
+
+  // Build summary message
+  const lines = [];
+  if (results.cashbackLots > 0) {
+    lines.push(`✓ ${results.cashbackLots} ${results.cashbackLots===1?'lote criado':'lotes criados'} (${results.cashbackQty.toFixed(4)} cashback agregado, €${fmt(results.cashbackEUR, 2)})`);
+  }
+  if (results.duplicateSkipped > 0) {
+    lines.push(`${results.duplicateSkipped} cashbacks duplicados ignorados`);
+  }
+  if (results.spendsRegistered > 0) {
+    lines.push(`(${results.spendsRegistered} gastos detectados — processamento fiscal completo na próxima fase)`);
+  }
+
+  toast(lines.length ? lines.join(' · ') : 'Nada importado', results.cashbackLots > 0 ? 'success' : 'info');
+
+  // Close modal and refresh
+  closeModal('modalImport');
+  window._taxAwareBatch = null;
+  window._taxAwareCardId = null;
+  window._taxAwareIssuer = null;
+  window._taxAwareCatAgg = null;
+
+  // Navigate to strategy tab if cashbacks were created
+  if (results.cashbackLots > 0) {
+    setTimeout(() => {
+      if (typeof showTab === 'function') showTab('strategy');
+    }, 300);
+  } else {
+    render();
+  }
 }
+
+window.confirmTaxAwareImport = confirmTaxAwareImport;
 
 window.previewImportTaxAware = previewImportTaxAware;
 window.toggleCatDetails = toggleCatDetails;
