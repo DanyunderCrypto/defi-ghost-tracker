@@ -1149,6 +1149,307 @@ td.muted  { color:var(--muted); }
   z-index: 4;
 }
 .card-real:hover .card-flip-hint { opacity: 0.5; }
+
+/* ══════════════════════════════════════════════════
+   R4: MEMPOOL 365D — isometric block grid
+   ══════════════════════════════════════════════════ */
+
+.mempool-section {
+  margin-bottom: 1.5rem;
+}
+
+.mempool-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+
+.mempool-pills {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.mempool-pill {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.8rem;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--trans);
+  white-space: nowrap;
+}
+.mempool-pill:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.mempool-pill.active {
+  background: rgba(212,175,122,0.12);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.mempool-pill .count {
+  font-size: 0.6rem;
+  margin-left: 0.3rem;
+  opacity: 0.7;
+}
+
+.mempool-sort {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mempool-sort-label {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.mempool-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem 1rem;
+  padding: 1.5rem 1rem 1rem;
+  background:
+    linear-gradient(180deg, rgba(212,175,122,0.02), transparent),
+    var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  min-height: 200px;
+  align-items: flex-end;
+  perspective: 1200px;
+}
+
+.mempool-empty {
+  width: 100%;
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Isometric block */
+.mempool-block {
+  position: relative;
+  cursor: pointer;
+  transition: transform 240ms var(--easing);
+  transform-style: preserve-3d;
+  transform: rotateX(55deg) rotateZ(-45deg);
+  margin: 1rem;
+}
+.mempool-block:hover {
+  transform: rotateX(55deg) rotateZ(-45deg) translateZ(20px) scale(1.05);
+  z-index: 10;
+}
+
+.mempool-block-top {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--blockColor, #444);
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.08),
+    inset 0 -10px 20px rgba(0,0,0,0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.mempool-block-side {
+  position: absolute;
+  background: var(--blockSideColor, #222);
+  border: 1px solid rgba(0,0,0,0.3);
+}
+.mempool-block-right {
+  top: 0;
+  right: 0;
+  width: var(--blockDepth, 20px);
+  height: 100%;
+  transform-origin: left center;
+  transform: rotateY(90deg) translateX(var(--blockDepth, 20px));
+  filter: brightness(0.7);
+}
+.mempool-block-bottom {
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: var(--blockDepth, 20px);
+  transform-origin: center top;
+  transform: rotateX(-90deg) translateY(var(--blockDepth, 20px));
+  filter: brightness(0.5);
+}
+
+/* Tooltip on hover */
+.mempool-tooltip {
+  position: fixed;
+  background: rgba(20,20,26,0.98);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  backdrop-filter: blur(20px);
+  z-index: 10000;
+  pointer-events: none;
+  min-width: 240px;
+  font-size: 0.8rem;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.mempool-tooltip.visible { opacity: 1; }
+.mempool-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.2rem 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+.mempool-tooltip-label { color: var(--text-muted); }
+.mempool-tooltip-value { color: var(--text); font-weight: 600; }
+.mempool-tooltip-header {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.mempool-tooltip-status {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 0.5rem;
+}
+
+/* Legend */
+.mempool-legend {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  margin-top: 1rem;
+}
+.mempool-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.mempool-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* Timeline horizontal */
+.mempool-timeline {
+  margin-top: 1.5rem;
+  padding: 1.2rem 1.4rem;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.mempool-timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.mempool-timeline-title {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.mempool-timeline-sub {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.mempool-timeline-track {
+  position: relative;
+  height: 60px;
+  background: linear-gradient(90deg, rgba(255,92,122,0.06), rgba(212,175,122,0.06), rgba(0,232,158,0.06));
+  border-radius: 30px;
+  border: 1px solid var(--border-soft);
+}
+.mempool-timeline-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--markerColor, var(--gold));
+  box-shadow: 0 0 8px var(--markerColor, var(--gold));
+  cursor: pointer;
+  transition: transform 160ms var(--easing);
+}
+.mempool-timeline-marker:hover {
+  transform: translate(-50%, -50%) scale(1.6);
+}
+.mempool-timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.mempool-timeline-totals {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-soft);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+.mempool-timeline-bucket {
+  text-align: center;
+}
+.mempool-timeline-bucket-value {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 0.2rem;
+}
 </style>
 </head>
 <body>
@@ -3637,6 +3938,91 @@ function useSuggestion(idx) {
   document.getElementById('col_acq')?.scrollIntoView({behavior: 'smooth', block: 'center'});
 }
 
+
+// ─────────────────────────────────────────────────
+// R4: Mempool 365d state + helpers
+// ─────────────────────────────────────────────────
+window.mempoolFilter = window.mempoolFilter || 'all';
+window.mempoolSort = window.mempoolSort || 'urgency';
+
+function setMempoolFilter(f) {
+  window.mempoolFilter = f;
+  render();
+}
+function setMempoolSort(s) {
+  window.mempoolSort = s;
+  render();
+}
+
+function mempoolBlockSize(eur) {
+  // Logarithmic scale: 60px (eur<=100) → 180px (eur>=10000)
+  const min = 60, max = 180;
+  const logMin = Math.log10(50), logMax = Math.log10(10000);
+  const v = Math.max(50, Math.min(10000, eur || 50));
+  const logV = Math.log10(v);
+  const ratio = (logV - logMin) / (logMax - logMin);
+  return Math.round(min + ratio * (max - min));
+}
+
+function mempoolBlockDepth(daysHeld) {
+  // 10px (fresh) → 40px (mature)
+  const d = Math.max(0, Math.min(365, daysHeld));
+  return Math.round(10 + (d / 365) * 30);
+}
+
+function mempoolBlockStatus(daysHeld) {
+  if (daysHeld >= 365) return 'exempt';
+  if (daysHeld >= 270) return 'imminent';
+  if (daysHeld >= 180) return 'maturing';
+  if (daysHeld >= 90)  return 'aging';
+  return 'fresh';
+}
+
+function mempoolBlockColors(status) {
+  switch(status) {
+    case 'exempt':   return { top:'#00E89E', side:'#008C5A' };
+    case 'imminent': return { top:'#FF7A4D', side:'#A0492C' };
+    case 'maturing': return { top:'#D4AF7A', side:'#8E7548' };
+    case 'aging':    return { top:'#7B6FFF', side:'#4A3FA8' };
+    case 'fresh':    return { top:'#5EB8FF', side:'#2D6FA8' };
+  }
+}
+
+function mempoolStatusLabel(status) {
+  return { exempt:'Isento', imminent:'Urgente', maturing:'A amadurecer', aging:'A envelhecer', fresh:'Recente' }[status];
+}
+
+function mempoolShowTooltip(e, lot) {
+  const tip = document.getElementById('mempoolTooltip');
+  if (!tip) return;
+  const held = daysHeld(lot.acqDate);
+  const left = Math.max(0, 365 - held);
+  const status = mempoolBlockStatus(held);
+  const exemptDate = new Date((new Date(lot.acqDate+'T12:00:00')).getTime() + 365*86400000);
+  const chain = CHAINS[lot.chain];
+  tip.innerHTML = `
+    <div class="mempool-tooltip-header">${lot.asset || '—'} · €${fmt(lot.eur)}</div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Quantidade</span><span class="mempool-tooltip-value">${fmt(lot.qty, 4)}</span></div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Chain</span><span class="mempool-tooltip-value" style="color:${chain?.color||'#888'}">${chain?.name || lot.chain || '—'}</span></div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Adquirido</span><span class="mempool-tooltip-value">${fmtDate(lot.acqDate)}</span></div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Dias detidos</span><span class="mempool-tooltip-value">${held} dias</span></div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Isenção em</span><span class="mempool-tooltip-value">${status==='exempt'?'✓ Já isento':left+' dias'}</span></div>
+    <div class="mempool-tooltip-row"><span class="mempool-tooltip-label">Data isenção</span><span class="mempool-tooltip-value">${status==='exempt'?'—':fmtDate(exemptDate.toISOString().split('T')[0])}</span></div>
+    ${lot.txhash?`<div class="mempool-tooltip-row"><span class="mempool-tooltip-label">TX</span><span class="mempool-tooltip-value" style="font-size:0.6rem">${truncTx(lot.txhash)}</span></div>`:''}
+    <div style="text-align:center"><span class="mempool-tooltip-status" style="background:${mempoolBlockColors(status).top}33;color:${mempoolBlockColors(status).top};border:1px solid ${mempoolBlockColors(status).top}66">${mempoolStatusLabel(status)}</span></div>
+  `;
+  tip.classList.add('visible');
+  // Position near cursor
+  const x = e.clientX + 16;
+  const y = e.clientY + 16;
+  tip.style.left = Math.min(x, window.innerWidth - 280) + 'px';
+  tip.style.top = Math.min(y, window.innerHeight - 280) + 'px';
+}
+function mempoolHideTooltip() {
+  const tip = document.getElementById('mempoolTooltip');
+  if (tip) tip.classList.remove('visible');
+}
+
 function renderStrategy(w) {
   const cols = state.collateral.filter(c=>c.walletId===w.id).sort((a,b)=>a.acqDate.localeCompare(b.acqDate));
   const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365);
@@ -3661,32 +4047,134 @@ function renderStrategy(w) {
       <div class="stat"><div class="stat-label">Total Registado</div><div class="stat-value sv-gold">€${fmt(totalEur)}</div></div>
     </div>
 
-    ${cols.length?`<div class="panel" style="margin-bottom:1.3rem">
-      <div class="panel-head"><span class="panel-title">Linha de Tempo FIFO</span></div>
-      <div class="panel-body">
-        <div style="overflow-x:auto"><div style="display:flex;gap:4px;min-width:${Math.max(400,cols.length*64)}px;margin-bottom:0.5rem">
-          ${cols.map((c,i)=>{
-            const held=daysHeld(c.acqDate), pct=Math.min(100,(held/365)*100), isento=held>=365, warn=held>=300&&!isento;
-            const cls=isento?'isento':warn?'warn':'pending';
-            const iDate=new Date((new Date(c.acqDate+'T12:00:00')).getTime()+365*86400000).toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit'});
-            return `<div class="fifo-seg ${cls}" style="min-width:58px;flex:1" title="L${i+1}: ${c.asset} €${fmt(c.eur)} — ${c.acqDate}">
-              <div style="font-size:0.58rem;font-family:var(--mono)">L${String(i+1).padStart(2,'0')}</div>
-              <div style="font-size:0.65rem;font-weight:700">${isento?'OK':held+'d'}</div>
-              <div style="font-size:0.55rem;opacity:0.7">${isento?'✓':'→'+iDate}</div>
-            </div>`;
-          }).join('')}
+    ${(()=>{
+      if(!cols.length) return '';
+      // Apply filter
+      const filt = window.mempoolFilter || 'all';
+      let displayCols = cols.map(c=>({...c, _held: daysHeld(c.acqDate), _status: mempoolBlockStatus(daysHeld(c.acqDate))}));
+      const counts = { all: displayCols.length };
+      ['exempt','imminent','maturing','aging','fresh'].forEach(st=>{ counts[st] = displayCols.filter(c=>c._status===st).length; });
+      if(filt!=='all') displayCols = displayCols.filter(c=>c._status===filt);
+      // Apply sort
+      const sortMode = window.mempoolSort || 'urgency';
+      if(sortMode==='urgency') displayCols.sort((a,b)=>a._held-b._held); // most days remaining first (least mature first)
+      else if(sortMode==='value') displayCols.sort((a,b)=>(+b.eur||0)-(+a.eur||0));
+      else if(sortMode==='date') displayCols.sort((a,b)=>a.acqDate.localeCompare(b.acqDate));
+      // For urgency, we want most urgent (closest to 365 but not yet) first
+      if(sortMode==='urgency') {
+        displayCols.sort((a,b)=>{
+          // exempt last; pending sorted by remaining days asc
+          if(a._held>=365 && b._held<365) return 1;
+          if(b._held>=365 && a._held<365) return -1;
+          return b._held - a._held; // higher held = closer to exempt = more urgent
+        });
+      }
+
+      // Timeline data: group by month
+      const now = new Date();
+      const buckets = { '<3m':0, '3-6m':0, '6-9m':0, '9-12m':0, 'exempt':0 };
+      cols.forEach(c=>{
+        const h = daysHeld(c.acqDate);
+        const eur = +c.eur || 0;
+        if(h>=365) buckets.exempt += eur;
+        else {
+          const left = 365 - h;
+          if(left<=90) buckets['<3m'] += eur;
+          else if(left<=180) buckets['3-6m'] += eur;
+          else if(left<=270) buckets['6-9m'] += eur;
+          else buckets['9-12m'] += eur;
+        }
+      });
+
+      const timelineMarkers = cols.filter(c=>daysHeld(c.acqDate)<365).map(c=>{
+        const left = 365 - daysHeld(c.acqDate);
+        const pct = 100 - (left/365)*100;
+        const status = mempoolBlockStatus(daysHeld(c.acqDate));
+        const color = mempoolBlockColors(status).top;
+        const exemptDate = new Date((new Date(c.acqDate+'T12:00:00')).getTime() + 365*86400000);
+        return `<div class="mempool-timeline-marker" style="left:${pct}%;--markerColor:${color}" title="${c.asset} €${fmt(c.eur)} → ${fmtDate(exemptDate.toISOString().split('T')[0])}"></div>`;
+      }).join('');
+
+      return `
+        <div class="mempool-section">
+          <div class="mempool-toolbar">
+            <div class="mempool-pills">
+              <button class="mempool-pill ${filt==='all'?'active':''}" onclick="setMempoolFilter('all')">Todos<span class="count">${counts.all}</span></button>
+              <button class="mempool-pill ${filt==='exempt'?'active':''}" onclick="setMempoolFilter('exempt')">Isentos<span class="count">${counts.exempt}</span></button>
+              <button class="mempool-pill ${filt==='imminent'?'active':''}" onclick="setMempoolFilter('imminent')">Urgentes<span class="count">${counts.imminent}</span></button>
+              <button class="mempool-pill ${filt==='maturing'?'active':''}" onclick="setMempoolFilter('maturing')">A amadurecer<span class="count">${counts.maturing}</span></button>
+              <button class="mempool-pill ${filt==='aging'?'active':''}" onclick="setMempoolFilter('aging')">A envelhecer<span class="count">${counts.aging}</span></button>
+              <button class="mempool-pill ${filt==='fresh'?'active':''}" onclick="setMempoolFilter('fresh')">Recentes<span class="count">${counts.fresh}</span></button>
+            </div>
+            <div class="mempool-sort">
+              <span class="mempool-sort-label">Ordenar por</span>
+              <button class="mempool-pill ${sortMode==='urgency'?'active':''}" onclick="setMempoolSort('urgency')">Urgência</button>
+              <button class="mempool-pill ${sortMode==='value'?'active':''}" onclick="setMempoolSort('value')">Valor</button>
+              <button class="mempool-pill ${sortMode==='date'?'active':''}" onclick="setMempoolSort('date')">Data</button>
+            </div>
+          </div>
+
+          <div class="mempool-grid">
+            ${displayCols.length ? displayCols.map(c=>{
+              const size = mempoolBlockSize(+c.eur||0);
+              const depth = mempoolBlockDepth(c._held);
+              const colors = mempoolBlockColors(c._status);
+              const lotJson = JSON.stringify({id:c.id, asset:c.asset, eur:c.eur, qty:c.qty, acqDate:c.acqDate, chain:c.chain, txhash:c.txhash||''}).replace(/"/g,'&quot;');
+              return `<div class="mempool-block"
+                style="width:${size}px;height:${size}px;--blockColor:${colors.top};--blockSideColor:${colors.side};--blockDepth:${depth}px"
+                onmousemove="mempoolShowTooltip(event, ${lotJson})"
+                onmouseleave="mempoolHideTooltip()">
+                <div class="mempool-block-top">€${(+c.eur>=1000)?(+c.eur/1000).toFixed(1)+'k':Math.round(+c.eur||0)}</div>
+                <div class="mempool-block-side mempool-block-right"></div>
+                <div class="mempool-block-side mempool-block-bottom"></div>
+              </div>`;
+            }).join('') : '<div class="mempool-empty">Nenhum lote corresponde ao filtro.</div>'}
+          </div>
+
+          <div class="mempool-legend">
+            <div class="mempool-legend-item"><span class="mempool-legend-dot" style="background:#00E89E"></span>Isento &gt;365d</div>
+            <div class="mempool-legend-item"><span class="mempool-legend-dot" style="background:#FF7A4D"></span>Urgente &gt;270d</div>
+            <div class="mempool-legend-item"><span class="mempool-legend-dot" style="background:#D4AF7A"></span>A amadurecer &gt;180d</div>
+            <div class="mempool-legend-item"><span class="mempool-legend-dot" style="background:#7B6FFF"></span>A envelhecer &gt;90d</div>
+            <div class="mempool-legend-item"><span class="mempool-legend-dot" style="background:#5EB8FF"></span>Recente &lt;90d</div>
+            <div class="mempool-legend-item" style="margin-left:auto;opacity:0.5">Tamanho ∝ valor · Altura ∝ tempo detido</div>
+          </div>
+
+          <div class="mempool-timeline">
+            <div class="mempool-timeline-header">
+              <div class="mempool-timeline-title">Próximas Isenções</div>
+              <div class="mempool-timeline-sub">365 dias · €${fmt(totalEur-totalIsento)} a libertar</div>
+            </div>
+            <div class="mempool-timeline-track">${timelineMarkers}</div>
+            <div class="mempool-timeline-labels">
+              <span>HOJE</span><span>3M</span><span>6M</span><span>9M</span><span>12M · ISENÇÃO</span>
+            </div>
+            <div class="mempool-timeline-totals">
+              <div class="mempool-timeline-bucket">
+                <span style="color:#FF7A4D">&lt; 3 MESES</span>
+                <span class="mempool-timeline-bucket-value" style="color:#FF7A4D">€${fmt(buckets['<3m'])}</span>
+              </div>
+              <div class="mempool-timeline-bucket">
+                <span style="color:#D4AF7A">3 - 6 MESES</span>
+                <span class="mempool-timeline-bucket-value" style="color:#D4AF7A">€${fmt(buckets['3-6m'])}</span>
+              </div>
+              <div class="mempool-timeline-bucket">
+                <span style="color:#7B6FFF">6 - 9 MESES</span>
+                <span class="mempool-timeline-bucket-value" style="color:#7B6FFF">€${fmt(buckets['6-9m'])}</span>
+              </div>
+              <div class="mempool-timeline-bucket">
+                <span style="color:#5EB8FF">9 - 12 MESES</span>
+                <span class="mempool-timeline-bucket-value" style="color:#5EB8FF">€${fmt(buckets['9-12m'])}</span>
+              </div>
+              <div class="mempool-timeline-bucket">
+                <span style="color:#00E89E">✓ ISENTO</span>
+                <span class="mempool-timeline-bucket-value" style="color:#00E89E">€${fmt(buckets.exempt)}</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div style="display:flex;gap:4px;min-width:${Math.max(400,cols.length*64)}px">
-          ${cols.map(c=>`<div style="min-width:58px;flex:1;text-align:center;font-family:var(--mono);font-size:0.58rem;color:var(--muted)">${fmtDate(c.acqDate).slice(0,5)}</div>`).join('')}
-        </div>
-        </div>
-        <div style="display:flex;gap:1.5rem;margin-top:1rem;font-family:var(--mono);font-size:0.68rem;color:var(--muted)">
-          <span style="color:var(--green)">■ Isento (≥365d)</span>
-          <span style="color:var(--gold)">■ Quase (&gt;300d)</span>
-          <span style="color:var(--muted)">■ Pendente</span>
-        </div>
-      </div>
-    </div>`:''}
+      `;
+    })()}
 
     <div class="panel">
       <div class="panel-head"><span class="panel-title">Detalhe por Lote</span></div>
@@ -5845,5 +6333,6 @@ function toast(msg, type='info', dur=5000) {
 // ══════════════════════════════════════════════════════════
 loadState();
 </script>
+<div id="mempoolTooltip" class="mempool-tooltip"></div>
 </body>
 </html>
