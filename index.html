@@ -8277,23 +8277,41 @@ function confirmTaxAwareImport() {
   // Save & feedback
   saveState();
 
-  // Build summary message
+  // Build summary message - DETAILED for debugging
+  const allItems = batch.items || [];
+  const cashbacksFound = allItems.filter(i => i.classification.category === 'cashback').length;
+
   const lines = [];
   if (results.cashbackLots > 0) {
-    lines.push(`✓ ${results.cashbackLots} ${results.cashbackLots===1?'lote criado':'lotes criados'} (${results.cashbackQty.toFixed(4)} cashback agregado, €${fmt(results.cashbackEUR, 2)})`);
-  }
-  if (results.duplicateSkipped > 0) {
-    lines.push(`${results.duplicateSkipped} cashbacks duplicados ignorados`);
-  }
-  if (results.spendsRegistered > 0) {
-    lines.push(`(${results.spendsRegistered} gastos detectados — processamento fiscal completo na próxima fase)`);
+    lines.push(`✓ ${results.cashbackLots} lote${results.cashbackLots>1?'s':''} criado${results.cashbackLots>1?'s':''} (€${fmt(results.cashbackEUR, 2)})`);
+  } else if (cashbacksFound > 0 && results.duplicateSkipped === cashbacksFound) {
+    lines.push(`⚠ ${cashbacksFound} cashbacks já existiam em state.collateral — nada criado (duplicate check)`);
+  } else if (cashbacksFound === 0) {
+    lines.push(`ℹ Ficheiro sem cashbacks detectados (0 entradas tipo 'cashback')`);
   }
 
-  const allProcessed = results.cashbackLots + results.spendsRegistered + results.topupsRegistered;
-  if (lines.length === 0 && allProcessed === 0) {
-    lines.push(`${(batch.items || []).length} transações processadas (${results.declinedIgnored} recusadas ignoradas)`);
+  if (results.duplicateSkipped > 0 && results.cashbackLots > 0) {
+    lines.push(`${results.duplicateSkipped} duplicados ignorados`);
   }
-  toast(lines.length ? lines.join(' · ') : 'Nada importado', results.cashbackLots > 0 ? 'success' : 'info');
+  if (results.spendsRegistered > 0) {
+    lines.push(`${results.spendsRegistered} gastos detectados (não persistidos — Fase 6E)`);
+  }
+  if (results.declinedIgnored > 0) {
+    lines.push(`${results.declinedIgnored} recusadas ignoradas`);
+  }
+
+  // Always show debug info in console for diagnostics
+  console.log('[Import Debug]', {
+    totalRows: allItems.length,
+    byCategory: batch.byCategory,
+    byAction: batch.byAction,
+    results,
+    issuerId,
+    cardId,
+  });
+
+  toast(lines.length ? lines.join(' · ') : `${allItems.length} transações processadas mas nada criado — vê F12 → Console`,
+        results.cashbackLots > 0 ? 'success' : (cashbacksFound > 0 ? 'warn' : 'info'));
 
   // Close modal and refresh
   closeModal('modalImport');
@@ -8302,13 +8320,13 @@ function confirmTaxAwareImport() {
   window._taxAwareIssuer = null;
   window._taxAwareCatAgg = null;
 
-  // Navigate to strategy tab if cashbacks were created
+  // Always render to refresh UI
+  render();
+  // Navigate to strategy tab if cashbacks were created (after render)
   if (results.cashbackLots > 0) {
     setTimeout(() => {
       if (typeof showTab === 'function') showTab('strategy');
-    }, 300);
-  } else {
-    render();
+    }, 350);
   }
 }
 
