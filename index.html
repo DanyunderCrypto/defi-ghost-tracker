@@ -4677,7 +4677,7 @@ function renderCards(w) {
 
     <div class="stats-grid" style="margin-bottom:1.3rem">
       <div class="stat"><div class="stat-label">Total Gasto</div><div class="stat-value sv-blue">€${fmt(totalSpend)}</div><div class="stat-sub">${cardSpends.length} transações${excludedCount > 0 ? ` · ${excludedCount} legacy ignoradas` : ""}</div></div>
-      <div class="stat"><div class="stat-label">Cashback</div><div class="stat-value sv-green">€${fmt(cashback)}</div><div class="stat-sub">28% PT → €${fmt(cashback*0.28)} imposto</div></div>
+      <div class="stat"><div class="stat-label">Cashback</div><div class="stat-value sv-green">€${fmt(cashback)}</div><div class="stat-sub">${rewardLots.length} lotes · Cat. G (isento &gt;365d)</div></div>
       <div class="stat"><div class="stat-label">Cartões Activos</div><div class="stat-value sv-gold">${walletCards.length}</div></div>
       <div class="stat"><div class="stat-label">Imports</div><div class="stat-value sv-muted">${walletImports.length}</div><div class="stat-sub">ficheiros importados</div></div>
     </div>
@@ -4738,7 +4738,7 @@ function renderCards(w) {
     </div>
 
     <div class="alert alert-warn" style="margin-top:1rem">
-      <span>⚠</span><div>O cashback recebido em cripto é <strong>Categoria E — 28%</strong> em Portugal, sem isenção de 365 dias. Cashback acumulado: €${fmt(cashback)} → imposto estimado: <strong>€${fmt(cashback*0.28)}</strong>.</div>
+      <span>⚠</span><div>O cashback em cripto é tratado como <strong>aquisição gratuita</strong> com valor de aquisição = €EUR à data do recebimento. Ao alienar, é <strong>Categoria G</strong> (mais-valia = preço de venda − basis): isento se detido &gt;365 dias, 28% se &lt;365 dias. Cashback acumulado: <strong>€${fmt(cashback)}</strong> (${rewardLots.length} lotes).</div>
     </div>
   `;
 }
@@ -7923,6 +7923,9 @@ function normalizeTxRow(row, issuerId) {
     originalCurrency: String(lc['original currency'] || lc['orig currency'] || lc['original ccy'] || '').toUpperCase(),
     category:         lc['category'] || lc['merchant category'] || '',
     txhash:           lc['txhash'] || lc['tx hash'] || lc['transaction hash'] || lc['hash'] || '',
+    // FASE 6E+ inline cashback fields (some issuers like ether.fi include them on card_spend rows)
+    inlineCashback:   parseFloat(lc['cashback earned'] || lc['cashback amount'] || lc['cashback'] || 0) || 0,
+    inlineCashbackCurrency: String(lc['cashback currency'] || lc['cashback ccy'] || '').toUpperCase(),
     _raw:             row,
   };
 }
@@ -8005,6 +8008,30 @@ function previewImportTaxAware(issuerId, cardId) {
     if (item.tx.originalCurrency === 'EUR') catAgg[cat].eur += Math.abs(item.tx.originalAmount || 0);
     catAgg[cat].items.push(item);
   });
+
+  // Add synthetic "cashback" aggregate for inline cashbacks (from card_spend rows)
+  let inlineCashbackTotal = 0;
+  let inlineCashbackCount = 0;
+  let inlineCashbackEUR = 0;
+  batch.items.forEach(item => {
+    const inlineAmt = +item.tx.inlineCashback || 0;
+    if (inlineAmt > 0 && item.classification.category === 'expense') {
+      inlineCashbackTotal += inlineAmt;
+      inlineCashbackCount++;
+      if ((item.tx.inlineCashbackCurrency || item.tx.currency) === 'EUR') {
+        inlineCashbackEUR += inlineAmt;
+      }
+    }
+  });
+  if (inlineCashbackCount > 0) {
+    if (!catAgg['cashback']) catAgg['cashback'] = { count: 0, usd: 0, eur: 0, items: [] };
+    catAgg['cashback'].count += inlineCashbackCount;
+    catAgg['cashback'].usd += inlineCashbackTotal;
+    catAgg['cashback'].eur += inlineCashbackEUR;
+    // Mark with synthetic flag so we can detect in render
+    catAgg['cashback']._hasInline = true;
+    catAgg['cashback']._inlineCount = inlineCashbackCount;
+  }
 
   // Store for later use by confirmImport
   window._taxAwareBatch = batch;
@@ -8170,8 +8197,37 @@ function confirmTaxAwareImport() {
 
   // ─────────────────────────────────────────────────
   // 1. CASHBACKS → group by (date, asset) → state.collateral
+  // Includes BOTH: explicit cashback transactions AND inline cashbacks from card_spend rows
   // ─────────────────────────────────────────────────
-  const cashbacks = (batch.items || []).filter(i => i.classification.category === 'cashback');
+  const explicitCashbacks = (batch.items || []).filter(i => i.classification.category === 'cashback');
+
+  // Synthesize inline cashbacks (from card_spend rows that have cashback earned > 0)
+  const inlineCashbackItems = [];
+  (batch.items || []).forEach(item => {
+    const tx = item.tx;
+    const inlineAmt = +tx.inlineCashback || 0;
+    if (inlineAmt > 0 && item.classification.category === 'expense' && item.classification.action !== 'pending') {
+      // Build a synthetic cashback tx
+      inlineCashbackItems.push({
+        idx: 'inline_' + item.idx,
+        tx: {
+          type: 'inline_cashback',
+          status: tx.status,
+          description: tx.inlineCashbackCurrency || tx.originalCurrency || 'EUR',
+          timestamp: tx.timestamp,
+          amount: inlineAmt,
+          currency: tx.inlineCashbackCurrency || tx.currency,
+          originalAmount: inlineAmt,
+          originalCurrency: tx.inlineCashbackCurrency || tx.currency,
+          txhash: tx.txhash || '',
+          _source: 'inline_' + (tx.txhash || tx.description || ''),
+        },
+        classification: { category: 'cashback', taxTreatment: 'reward_new_lot', action: 'process' },
+      });
+    }
+  });
+
+  const cashbacks = [...explicitCashbacks, ...inlineCashbackItems];
 
   if (cashbacks.length > 0) {
     // Group by (date YYYY-MM-DD, asset)
@@ -8216,6 +8272,7 @@ function confirmTaxAwareImport() {
           eur: 0,
           count: 0,
           txhashes: [],
+          _isInline: tx.type === 'inline_cashback',
         };
       }
       const g = groups[key];
@@ -8234,11 +8291,17 @@ function confirmTaxAwareImport() {
     // Create lots in state.collateral
     Object.values(groups).forEach(g => {
       // Duplicate check: same date + asset + walletId already in state.collateral as reward?
+      // Dedup by (wallet, date, asset, origin=reward, AND _source if it's an inline batch)
+      // This way inline cashbacks for the same day+asset aren't merged with explicit ones,
+      // but re-imports of the same file ARE skipped.
       const existing = state.collateral.find(c =>
         c.walletId === w.id &&
         c.acqDate === g.date &&
         c.asset === g.asset &&
-        c.origin === 'reward'
+        c.origin === 'reward' &&
+        // For inline cashbacks, also check the issuer to allow co-existence with explicit cashback lots
+        ((g._isInline && c.originDetails?.type === 'inline_cashback') ||
+         (!g._isInline && c.originDetails?.type !== 'inline_cashback'))
       );
       if (existing) {
         results.duplicateSkipped++;
@@ -8256,8 +8319,8 @@ function confirmTaxAwareImport() {
         qty: g.qty || (g.usd / 3500),  // rough fallback if no qty
         eur: g.eur,
         price: g.qty > 0 ? (g.usd / g.qty) : 0,
-        origin: 'reward',  // NEW: distinguishes from fiat_purchase
-        originDetails: { type: 'cashback', issuer: issuerId, count: g.count },
+        origin: 'reward',  // distinguishes from fiat_purchase
+        originDetails: { type: g._isInline ? 'inline_cashback' : 'cashback', issuer: issuerId, count: g.count },
         txhash: g.txhashes[0] || '',
         notes: `Cashback ${ISSUER_ADAPTERS[issuerId]?.name || issuerId}${g.count > 1 ? ` (${g.count} agrupados)` : ''}`,
       };
