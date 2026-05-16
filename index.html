@@ -6786,8 +6786,13 @@ async function startIndexerForActiveWallet() {
     toast('Sem wallet activa', 'warn');
     return;
   }
-  if (!w.evm) {
+  const walletAddr = w.addr || w.evm || '';
+  if (!walletAddr) {
     toast('Wallet sem endereço EVM', 'warn');
+    return;
+  }
+  if (!walletAddr.startsWith('0x') || walletAddr.length !== 42) {
+    toast('Endereço EVM inválido (deve começar com 0x e ter 42 caracteres)', 'warn');
     return;
   }
   if (!w.alchemyKey) {
@@ -6804,7 +6809,7 @@ async function startIndexerForActiveWallet() {
   render();
 
   try {
-    const summary = await universalIndexer.indexWallet(w.evm, w.alchemyKey, {
+    const summary = await universalIndexer.indexWallet(walletAddr, w.alchemyKey, {
       signal: window._indexerController.signal,
       onProgress: (p) => {
         const phaseEl = document.getElementById('indexerPhase');
@@ -6858,7 +6863,7 @@ function cancelIndexer() {
 function clearWalletEvents() {
   const w = activeWallet();
   if (!w) return;
-  const wAddr = (w.evm || '').toLowerCase();
+  const wAddr = (w.addr || w.evm || '').toLowerCase();
   const count = (state.events || []).filter(e => e.walletAddress === wAddr).length;
   if (count === 0) return;
   if (!confirm(`Apagar ${count} eventos indexados para esta wallet? Vai precisar de re-indexar depois.`)) return;
@@ -6877,7 +6882,7 @@ function renderHistory(w) {
   state.events = state.events || [];
   state.indexerMeta = state.indexerMeta || {};
 
-  const wAddr = (w.evm || '').toLowerCase();
+  const wAddr = (w.addr || w.evm || '').toLowerCase();
   const walletEvents = state.events.filter(e => e.walletAddress === wAddr);
   const meta = state.indexerMeta[w.id] || {};
 
@@ -6977,6 +6982,11 @@ function renderHistory(w) {
             <span>⚠</span>
             <div>Configura a tua Alchemy API Key em <strong>Config → Conexões</strong> para activar o indexer.</div>
           </div>
+        ` : !(w.addr || w.evm) ? `
+          <div class="alert alert-warn" style="margin-bottom:1rem">
+            <span>⚠</span>
+            <div>Esta wallet não tem endereço EVM. Edita em <strong>Wallets</strong> para adicionar.</div>
+          </div>
         ` : ''}
         <div id="indexerProgress" style="margin-bottom:1rem;display:${isIndexing ? 'block' : 'none'}">
           <div style="background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:1rem">
@@ -6990,7 +7000,7 @@ function renderHistory(w) {
           </div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
-          <button class="btn btn-gold btn-sm" onclick="startIndexerForActiveWallet()" ${!w.alchemyKey || isIndexing ? 'disabled' : ''}>
+          <button class="btn btn-gold btn-sm" onclick="startIndexerForActiveWallet()" ${!w.alchemyKey || !(w.addr || w.evm) || isIndexing ? 'disabled' : ''}>
             ${isIndexing ? '⏳ A indexar…' : (totalEvents > 0 ? '↻ Re-indexar' : '⚡ Indexar Agora')}
           </button>
           ${isIndexing ? `<button class="btn btn-outline btn-sm" onclick="cancelIndexer()">✕ Cancelar</button>` : ''}
