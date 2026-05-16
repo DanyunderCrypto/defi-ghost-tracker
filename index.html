@@ -2547,6 +2547,11 @@ body.stealth-mode .stealth-badge {
 // ══════════════════════════════════════════════════════════
 // NETWORK & PROTOCOL CONFIG
 // ══════════════════════════════════════════════════════════
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 1 — ENVIRONMENT & UTILITIES                                    ║
+// ║  Constants, helpers, utility functions                                  ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 const CHAINS = {
   eth:      { name:'Ethereum',  id:1,      color:'#627EEA', rpcs:['https://cloudflare-eth.com','https://ethereum.publicnode.com','https://rpc.ankr.com/eth'], explorer:'https://etherscan.io',          explorerApi:'https://api.etherscan.io/api',          aavePool:'0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2' },
   base:     { name:'Base',      id:8453,   color:'#0052FF', rpcs:['https://mainnet.base.org','https://base.publicnode.com','https://base.llamarpc.com'],    explorer:'https://basescan.org',           explorerApi:'https://api.basescan.org/api',          aavePool:'0xA238Dd80C259a72e81d7e4664a9801593F98d1c5' },
@@ -3120,6 +3125,11 @@ let interestTimer = null;
 // ══════════════════════════════════════════════════════════
 async function loadState() {
   // C2: Schema versioning
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2 — STATE & PERSISTENCE                                        ║
+// ║  Schema versioning, migrations, localStorage I/O                        ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
   const SCHEMA_VERSION = 4;
   // Migrations applied in order. Each gets the state and returns migrated state.
   const MIGRATIONS = {
@@ -3840,6 +3850,11 @@ function getSnapshotDelta24h(currentNet) {
   return { abs: deltaAbs, pct: deltaPct, since: candidate.date, hoursAgo: Math.round((now - candidate.ts)/3600000) };
 }
 
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 7 — UI: RENDERING (tabs, panels, cards, tables)                ║
+// ║  All render* functions emit HTML strings for display                    ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 function renderDashboard(w) {
   // Build unified protocol list
   const protoEntries = [];
@@ -7769,6 +7784,12 @@ function deleteCollateral(id) {
 // ═══════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 3 — DOMAIN: ADAPTERS (pure, testable)                          ║
+// ║  Universal row parsers — one per issuer (ether.fi, Tria, MetaMask...)   ║
+// ║  Synced to: aurum-tests/src/universal-adapters.js                       ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 // UNIVERSAL CARD IMPORT — Adapter pattern
 //
 // Each issuer adapter must provide:
@@ -8133,6 +8154,13 @@ window._parseDateFlexible = _parseDateFlexible;
 window._parseAmountWithCurrency = _parseAmountWithCurrency;
 
 
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 4 — DOMAIN: CLASSIFIER (pure, testable)                        ║
+// ║  Tax categorization per the Lei 24-D/2022 / Art. 10º CIRS               ║
+// ║  Synced to: aurum-tests/src/classifier.js                               ║
+// ║  Test invariants documented in tests/integration.test.js                ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 // FASE 6B: Transaction Classifier — multi-issuer ready
 // ═══════════════════════════════════════════════════════════
 //
@@ -8494,6 +8522,11 @@ window.detectIssuerFromImport = detectIssuerFromImport;
 window.normalizeTxRow = normalizeTxRow;
 
 // ═══════════════════════════════════════════════════════════
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 5 — IMPORT FLOW: PREVIEW & CONFIRM                             ║
+// ║  Tax-aware UI for confirming imports (DOM-dependent)                    ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 // FASE 6C: Tax-aware import preview (uses classifier)
 // ═══════════════════════════════════════════════════════════
 
@@ -9108,6 +9141,11 @@ window.classifyTransaction = classifyTransaction;
 window.classifyTransactionBatch = classifyTransactionBatch;
 window.TX_CATEGORIES = TX_CATEGORIES;
 
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 6 — UI: CARD TAX SETUP WIZARD                                  ║
+// ║  Modal for first-time card tax configuration                            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 // FASE 6A: Card Tax Setup Wizard
 // ─────────────────────────────────────────────────
 window.currentSetupCardId = null;
@@ -9551,6 +9589,11 @@ function shareGhostCard(platform) {
 // FASE 6F: Tax Report Exports
 // ═══════════════════════════════════════════════════════════
 
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 8 — TAX REPORT EXPORTS (CSV + HTML)                            ║
+// ║  Generates Anexo G/G1/E ready for contabilista                          ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 function exportFiscalCSV() {
   const w = activeWallet();
   if (!w) { toast('Sem wallet activa', 'warn'); return; }
