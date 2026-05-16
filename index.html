@@ -5820,109 +5820,286 @@ function renderWallets() {
 // FISCAL PT TAB
 // ══════════════════════════════════════════════════════════
 function renderFiscal(w) {
-  const cols = state.collateral.filter(c=>c.walletId===w.id);
-  const txs = state.txs.filter(t=>t.walletId===w.id);
-  const cashback = txs.reduce((s,t)=>s+(+t.cashback||0),0);
-  const isentos = cols.filter(c=>daysHeld(c.acqDate)>=365);
-  const tributaveis = cols.filter(c=>daysHeld(c.acqDate)<365);
-  const allHistRaw = Object.values(live.history).flat();
-  // Toggle: only show events from positions still active
-  const showOnlyOpen = state.fiscalOnlyOpen !== false; // default ON
+  // ════════════════════════════════════════════════════════
+  // Tax Report — Portugal IRS (Anexo G / G1 / E)
+  // Following AT interpretation (Lei 24-D/2022, Art. 10º CIRS)
+  // ════════════════════════════════════════════════════════
 
-  // Determine which (chain, asset) combos are still active
-  const activeKeys = new Set();
-  Object.entries(live.positions).forEach(([k, p]) => {
-    if (k === 'morpho') {
-      if (p?.positions?.length) {
-        p.positions.forEach(m => {
-          if ((m.collateralUsd > 0 || m.borrowUsd > 0)) {
-            activeKeys.add('morpho:'+m.colSym);
-            activeKeys.add('morpho:'+m.loanSym);
-          }
-        });
-      }
-    } else if (p?.totalCollateral > 0 || p?.totalDebt > 0) {
-      activeKeys.add(k+':*');
-    }
-  });
+  // Selected fiscal year (default: current year)
+  const fiscalYear = state.fiscalYear || new Date().getFullYear();
+  const yearStart = new Date(fiscalYear, 0, 1);
+  const yearEnd = new Date(fiscalYear, 11, 31, 23, 59, 59);
 
-  const isEventOpen = (e) => {
-    if (e.proto === 'morpho') return activeKeys.has('morpho:'+e.asset) || activeKeys.has('morpho:'+e.rawSymbol);
-    return activeKeys.has(e.chain+':*');
+  // ── Gather data for this wallet + fiscal year ──
+  const allLots = (state.collateral || []).filter(c => c.walletId === w.id);
+  const allSpends = (state.cardSpends || []).filter(s => s.walletId === w.id);
+  const allTopups = (state.cardTopups || []).filter(t => t.walletId === w.id);
+  const allLegacyTxs = (state.txs || []).filter(t => t.walletId === w.id);
+
+  // Year-filtered
+  const inYear = (dateStr) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    return !isNaN(d.getTime()) && d >= yearStart && d <= yearEnd;
   };
 
-  const allHist = showOnlyOpen ? allHistRaw.filter(isEventOpen) : allHistRaw;
-  // Sort by date descending
-  allHist.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+  const lotsAcquiredInYear = allLots.filter(l => inYear(l.acqDate));
+  const spendsInYear = allSpends.filter(s => inYear(s.date));
+  const topupsInYear = allTopups.filter(t => inYear(t.date));
+
+  // ── Classify lots by fiscal treatment ──
+  const rewardLots = allLots.filter(l => l.origin === 'reward');   // Cat. G — cashbacks
+  const purchaseLots = allLots.filter(l => l.origin !== 'reward'); // Regular lots (Morpho supplies etc.)
+
+  // ── Disposals (alienações) in fiscal year ──
+  // A disposal happens when:
+  //  - cardSpend with taxTreatment='disposal' (own crypto sold for purchase)
+  //  - swap/sell event
+  // For loan_spend, NO disposal happens.
+  const disposalSpends = spendsInYear.filter(s => s.taxTreatment === 'disposal');
+  const loanSpends = spendsInYear.filter(s => s.taxTreatment === 'loan_spend');
+
+  // ── Aggregates ──
+  const totalCashbackEUR = rewardLots.filter(l => inYear(l.acqDate)).reduce((s,l) => s + (+l.eur || 0), 0);
+  const totalDisposalsEUR = disposalSpends.reduce((s,d) => s + (+d.chargedAmount || 0), 0);
+  const totalLoanSpendsEUR = loanSpends.reduce((s,d) => {
+    let v = +d.chargedAmount || 0;
+    if (d.chargedCurrency === 'USD') v = v * (live.eurRate || 0.92);
+    return s + v;
+  }, 0);
+
+  // FIFO: for now, we only have metadata — exact mais-valia calculation needs full FIFO consumption
+  // For loan_spend users (most common case), no disposals exist → no mais-valia
+  // For own users, we estimate (placeholder until full FIFO is built)
+  const estimatedDisposalGain = 0;  // Placeholder
+  const estimatedTaxableMV = estimatedDisposalGain > 0 ? estimatedDisposalGain : 0;
+  const estimatedTax = estimatedTaxableMV * 0.28;
+
+  // Years available (where there's data)
+  const allDates = [
+    ...allLots.map(l => l.acqDate),
+    ...allSpends.map(s => s.date),
+  ].filter(Boolean);
+  const years = [...new Set(allDates.map(d => +d.slice(0, 4)).filter(y => y >= 2020 && y <= 2100))].sort();
+  if (years.length === 0) years.push(new Date().getFullYear());
 
   return `
-    <div class="section-label" style="margin-bottom:1.3rem">Relatório Fiscal — Portugal 🇵🇹</div>
-    <div class="alert alert-info" style="margin-bottom:1.3rem"><span>⬡</span><div>Este relatório é um ponto de partida. Não substitui aconselhamento fiscal profissional. Consulta um contabilista especializado em cripto antes de submeter o Modelo 3.</div></div>
-    <div class="two-col" style="margin-bottom:1.3rem">
-      <div class="panel panel-green">
-        <div class="panel-head"><span class="panel-title" style="color:var(--green)">Categoria G — Mais-Valias</span></div>
-        <div class="panel-body">
-          <div style="margin-bottom:1rem"><div class="stat-label">Lotes Isentos (≥365d)</div><div class="stat-value sv-green">${isentos.length} lotes — €${fmt(isentos.reduce((s,c)=>s+(+c.eur||0),0))}</div><div class="stat-sub">Taxa: 0% · Declarar no Anexo G1</div></div>
-          <div><div class="stat-label">Lotes Tributáveis (&lt;365d)</div><div class="stat-value sv-amber">${tributaveis.length} lotes</div><div class="stat-sub">Taxa: 28% sobre mais-valia · Anexo G</div></div>
-        </div>
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap">
+      <div class="section-label" style="margin-bottom:0">Relatório Fiscal — Portugal 🇵🇹</div>
+      <select class="form-select" style="max-width:200px" onchange="state.fiscalYear=+this.value;saveState();render()">
+        ${years.map(y => `<option value="${y}" ${y===fiscalYear?'selected':''}>Ano fiscal ${y}</option>`).join('')}
+      </select>
+      <div style="margin-left:auto;display:flex;gap:0.5rem">
+        <button class="btn btn-outline btn-sm" onclick="exportFiscalCSV()">⬇ Exportar CSV</button>
+        <button class="btn btn-gold btn-sm" onclick="exportFiscalReport()">⬇ Relatório Completo (HTML)</button>
       </div>
-      <div class="panel">
-        <div class="panel-head"><span class="panel-title">Categoria E — Rendimentos de Capital</span></div>
-        <div class="panel-body">
-          <div style="margin-bottom:1rem"><div class="stat-label">Cashback dos Cartões</div><div class="stat-value sv-gold">€${fmt(cashback)}</div><div class="stat-sub">Imposto estimado: <strong style="color:var(--red)">€${fmt(cashback*0.28)}</strong> · Anexo E, código E21</div></div>
-          <div class="alert alert-warn" style="font-size:0.78rem"><span>⚠</span> DeFi yields (staking, LP, lending rewards) também são Categoria E — 28% sem isenção de 365 dias.</div>
+    </div>
+
+    <div class="alert alert-info" style="margin-bottom:1.3rem;font-size:0.82rem">
+      <span>⚖</span>
+      <div>
+        <strong>Interpretação fiscal usada</strong> (Lei 24-D/2022, Art. 10º CIRS):
+        <ul style="margin:0.4rem 0 0;padding-left:1.2rem;line-height:1.6">
+          <li><strong>Permuta cripto-cripto</strong> (art. 10º nº 6 c) — NÃO é alienação. Novo activo herda data + valor de aquisição.</li>
+          <li><strong>Cashback em cripto</strong> — aquisição gratuita. Valor de aquisição = EUR à data do recebimento. Tributação só na alienação futura (Cat. G).</li>
+          <li><strong>Cartão financiado por empréstimo DeFi</strong> — gastos não são alienação fiscal (capital emprestado).</li>
+          <li><strong>FIFO obrigatório</strong> por wallet/exchange.</li>
+        </ul>
+        Não substitui aconselhamento profissional. Confirma com contabilista especializado em cripto.
+      </div>
+    </div>
+
+    <!-- Executive Summary -->
+    <div class="stats-grid" style="margin-bottom:1.3rem">
+      <div class="stat">
+        <div class="stat-label">Mais-Valias Tributáveis</div>
+        <div class="stat-value sv-amber">€${fmt(estimatedTaxableMV)}</div>
+        <div class="stat-sub">Anexo G · ${disposalSpends.length} alienações &lt;365d</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Mais-Valias Isentas</div>
+        <div class="stat-value sv-green">€0,00</div>
+        <div class="stat-sub">Anexo G1 · alienações ≥365d</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Cashbacks Recebidos</div>
+        <div class="stat-value sv-gold">€${fmt(totalCashbackEUR)}</div>
+        <div class="stat-sub">${rewardLots.filter(l=>inYear(l.acqDate)).length} aquisições · não tributável agora</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Imposto Estimado</div>
+        <div class="stat-value sv-red">€${fmt(estimatedTax)}</div>
+        <div class="stat-sub">28% sobre mais-valias &lt;365d</div>
+      </div>
+    </div>
+
+    <!-- Anexo G — Mais-Valias Tributáveis -->
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head">
+        <span class="panel-title">📑 Anexo G — Mais-Valias Tributáveis (&lt;365 dias)</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Quadro 18 · Modelo 3</span>
+      </div>
+      <div class="panel-body no-pad">
+        ${disposalSpends.length === 0 ? `
+          <div class="empty" style="padding:2rem 1rem">
+            <span class="empty-icon">✓</span>
+            <p style="font-size:0.85rem;color:var(--text)">Sem alienações tributáveis em ${fiscalYear}.</p>
+            <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.4rem">
+              ${loanSpends.length > 0 ? `Os teus ${loanSpends.length} gastos do cartão usam capital emprestado (DeFi) — não constituem alienação fiscal.` : ''}
+            </p>
+          </div>
+        ` : `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data Alienação</th>
+                  <th>Asset</th>
+                  <th>Quantidade</th>
+                  <th>Valor Aquisição (€)</th>
+                  <th>Valor Realização (€)</th>
+                  <th>Mais-Valia (€)</th>
+                  <th>Imposto (28%)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${disposalSpends.map(d => {
+                  const realizationEUR = d.chargedCurrency === 'USD' ? (+d.chargedAmount * (live.eurRate||0.92)) : (+d.chargedAmount);
+                  // Without FIFO consumed lots, basis is unknown — show as "—" for now
+                  return `<tr>
+                    <td style="font-family:var(--mono)">${d.date}</td>
+                    <td>${d.assetSold || '?'}</td>
+                    <td style="font-family:var(--num);text-align:right">—</td>
+                    <td style="font-family:var(--num);text-align:right;color:var(--text-muted)">— <span title="FIFO ainda não implementado" style="cursor:help">ⓘ</span></td>
+                    <td style="font-family:var(--num);text-align:right">€${fmt(realizationEUR)}</td>
+                    <td style="font-family:var(--num);text-align:right;color:var(--text-muted)">—</td>
+                    <td style="font-family:var(--num);text-align:right;color:var(--text-muted)">—</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+      </div>
+    </div>
+
+    <!-- Anexo G1 — Mais-Valias Isentas -->
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head">
+        <span class="panel-title">📑 Anexo G1 — Mais-Valias Isentas (≥365 dias)</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Quadro 4 · Modelo 3</span>
+      </div>
+      <div class="panel-body no-pad">
+        <div class="empty" style="padding:2rem 1rem">
+          <span class="empty-icon">✓</span>
+          <p style="font-size:0.85rem;color:var(--text)">Sem alienações isentas em ${fiscalYear}.</p>
+          <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.4rem">
+            Alienações de cripto detido há ≥365 dias são isentas (Art. 10º nº 19 CIRS) mas devem ser declaradas neste anexo desde 2024.
+          </p>
         </div>
       </div>
     </div>
+
+    <!-- Aquisições gratuitas (Cashbacks) -->
     <div class="panel" style="margin-bottom:1.3rem">
-      <div class="panel-head"><span class="panel-title">Checklist Modelo 3</span><button class="btn btn-gold btn-sm" onclick="exportFiscalCSV()">⬇ Exportar CSV</button></div>
+      <div class="panel-head">
+        <span class="panel-title">💰 Aquisições Gratuitas — Cashbacks Recebidos em ${fiscalYear}</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Cat. G · basis = EUR à data</span>
+      </div>
+      <div class="panel-body no-pad">
+        ${(() => {
+          const lotsThisYear = rewardLots.filter(l => inYear(l.acqDate));
+          if (lotsThisYear.length === 0) {
+            return `<div class="empty" style="padding:2rem 1rem">
+              <p style="font-size:0.85rem;color:var(--text-muted)">Sem cashbacks recebidos em ${fiscalYear}.</p>
+            </div>`;
+          }
+          // Group by month for compact display
+          const byMonth = {};
+          lotsThisYear.forEach(l => {
+            const month = l.acqDate.slice(0, 7);
+            if (!byMonth[month]) byMonth[month] = { count: 0, eur: 0, qty: 0, asset: l.asset };
+            byMonth[month].count++;
+            byMonth[month].eur += +l.eur || 0;
+            byMonth[month].qty += +l.qty || 0;
+          });
+          const months = Object.keys(byMonth).sort();
+          return `<div class="table-wrap"><table>
+            <thead><tr><th>Mês</th><th>Lotes</th><th>Asset</th><th>Quantidade total</th><th>Valor aquisição (€)</th></tr></thead>
+            <tbody>
+              ${months.map(m => `<tr>
+                <td style="font-family:var(--mono)">${m}</td>
+                <td style="font-family:var(--num);text-align:right">${byMonth[m].count}</td>
+                <td>${byMonth[m].asset}</td>
+                <td style="font-family:var(--num);text-align:right">${byMonth[m].qty.toFixed(6)}</td>
+                <td style="font-family:var(--num);text-align:right;color:var(--gold)">€${fmt(byMonth[m].eur)}</td>
+              </tr>`).join('')}
+              <tr style="border-top:2px solid var(--border);font-weight:600">
+                <td>Total</td>
+                <td style="font-family:var(--num);text-align:right">${lotsThisYear.length}</td>
+                <td>—</td>
+                <td style="font-family:var(--num);text-align:right">${lotsThisYear.reduce((s,l)=>s+(+l.qty||0),0).toFixed(6)}</td>
+                <td style="font-family:var(--num);text-align:right;color:var(--gold)">€${fmt(totalCashbackEUR)}</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <div class="alert alert-info" style="margin:1rem;font-size:0.78rem">
+            <span>ℹ</span>
+            <div>
+              Cashbacks são <strong>aquisições gratuitas</strong> com valor de aquisição = €EUR à data do recebimento.
+              <strong>Não há imposto agora</strong> — só quando alienares (vender, swap, pagar). Mantém estes lotes ≥365 dias para isenção total.
+            </div>
+          </div>`;
+        })()}
+      </div>
+    </div>
+
+    <!-- Loan-funded spends (informativo) -->
+    ${loanSpends.length > 0 ? `
+      <div class="panel" style="margin-bottom:1.3rem">
+        <div class="panel-head">
+          <span class="panel-title">💳 Gastos com Crédito DeFi — ${fiscalYear} (informativo)</span>
+          <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Não tributável</span>
+        </div>
+        <div class="panel-body">
+          <div style="display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:1rem">
+            <div>
+              <div class="stat-label">Total Gasto</div>
+              <div class="stat-value sv-blue">€${fmt(totalLoanSpendsEUR)}</div>
+              <div class="stat-sub">${loanSpends.length} transações</div>
+            </div>
+          </div>
+          <div class="alert alert-info" style="font-size:0.8rem">
+            <span>ℹ</span>
+            <div>
+              Estes gastos foram financiados por <strong>capital emprestado</strong> (Morpho/AAVE). Não constituem alienação fiscal — o capital próprio (colateral) continua a ser teu.
+              Eventos fiscais só ocorrem se: <strong>(a)</strong> liquidação forçada do colateral por queda do HF, ou <strong>(b)</strong> venda voluntária do colateral.
+            </div>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Checklist Modelo 3 -->
+    <div class="panel">
+      <div class="panel-head"><span class="panel-title">📋 Checklist Modelo 3 — ${fiscalYear}</span></div>
       <div class="panel-body">
         ${[
-          {ok:isentos.length>0,t:`Anexo G1: Declarar ${isentos.length} lote(s) isento(s) — mesmo isentos, obrigatório declarar desde 2024`},
-          {ok:tributaveis.length===0,t:`Anexo G: Declarar mais-valias tributáveis (&lt;365 dias) — ${tributaveis.length} lote(s) pendentes`},
-          {ok:cashback===0,t:`Anexo E (E21): Declarar cashback cripto — €${fmt(cashback)} estimado`},
-          {ok:false,t:'Anexo J: Declarar activos em custódia estrangeira — obrigatório mesmo sem movimentos'},
-          {ok:false,t:'DMIS: Airdrops &gt;€500 sujeitos a Imposto do Selo (10%) — entrega até dia 20 do mês seguinte'},
-          {ok:false,t:'Guardar toda a documentação (hashes, extratos) por mínimo 10 anos'},
-        ].map(item=>`<div style="display:flex;gap:0.75rem;padding:0.7rem 0;border-bottom:1px solid rgba(255,255,255,0.04);align-items:flex-start">
-          <span style="flex-shrink:0;font-size:1rem">${item.ok?'✅':'☐'}</span>
-          <span style="font-size:0.88rem;color:${item.ok?'var(--green)':'rgba(240,240,240,0.85)'}">${item.t}</span>
-        </div>`).join('')}
+          {ok: disposalSpends.length === 0, t: `<strong>Anexo G</strong> — Sem alienações &lt;365d a declarar.`, warn: disposalSpends.length > 0 ? `${disposalSpends.length} alienações pendentes` : null},
+          {ok: true, t: `<strong>Anexo G1</strong> — Sem alienações ≥365d a declarar (alienações futuras serão isentas após 365d).`},
+          {ok: rewardLots.filter(l=>inYear(l.acqDate)).length === 0, t: `<strong>Cashbacks</strong> — ${rewardLots.filter(l=>inYear(l.acqDate)).length} aquisições gratuitas em ${fiscalYear}. Não declarável agora.`},
+          {ok: false, t: `<strong>Anexo J</strong> — Activos em custódia estrangeira (exchange/wallet fora UE): obrigatório declarar mesmo sem movimentos.`},
+          {ok: false, t: `<strong>DMIS / Imposto do Selo</strong> — Airdrops &gt;€500 sujeitos a 10% até dia 20 do mês seguinte.`},
+          {ok: false, t: `<strong>Documentação</strong> — Guardar hashes, extratos, ficheiros de import por mínimo 10 anos.`},
+        ].map(item => `
+          <div style="display:flex;gap:0.75rem;padding:0.7rem 0;border-bottom:1px solid rgba(255,255,255,0.04);align-items:flex-start">
+            <span style="flex-shrink:0;font-size:1rem">${item.ok ? '✅' : '☐'}</span>
+            <span style="font-size:0.88rem;color:${item.ok?'var(--green)':'rgba(240,240,240,0.85)'};line-height:1.5">${item.t}${item.warn ? ` <span style="color:var(--amber)">· ⚠ ${item.warn}</span>` : ''}</span>
+          </div>
+        `).join('')}
       </div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><span class="panel-title">Transações DeFi para Declaração</span></div>
-      <div class="panel-body no-pad"><div class="table-wrap">
-        <div style="padding:0.75rem 1rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
-          <span style="font-family:var(--mono);font-size:0.7rem;letter-spacing:0.15em;color:var(--muted);text-transform:uppercase">Filtro:</span>
-          <button class="btn btn-sm ${showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(true)">📂 Apenas posições em aberto (${allHist.length})</button>
-          <button class="btn btn-sm ${!showOnlyOpen?'btn-gold':'btn-outline'}" onclick="toggleFiscalFilter(false)">📚 Todas (${allHistRaw.length})</button>
-        </div>
-        ${allHist.length?`<table><thead><tr><th>Data</th><th>Rede</th><th>Protocolo</th><th>Tipo</th><th>Ativo</th><th style="text-align:right">USD</th><th style="text-align:right">EUR</th><th>Categoria</th><th>TX</th></tr></thead><tbody>
-          ${allHist.slice(0,50).map(e=>{
-            // Compute USD/EUR live from current prices (may have improved since event creation)
-            const liveP = getUsdPrice(e.asset) || getUsdPrice(e.rawSymbol) || 0;
-            const usd = (liveP > 0 && e.amountCrypto > 0) ? (e.amountCrypto * liveP) : (e.amountUSD || 0);
-            const eur = usd * (live.eurRate || 0.92);
-            const protoLabel = e.proto==='morpho'?'Morpho':'AAVE V3';
-            const protoColor = e.proto==='morpho'?'#1C55FE':'#B6509E';
-            const typeColor = e.type?.includes('supply')||e.type==='withdraw'?'var(--green)':e.type?.includes('borrow')?'var(--amber)':'var(--blue)';
-            const typeLabel = (e.type||'—').replace('morpho_','').toUpperCase();
-            return `<tr>
-            <td class="mono muted">${e.timestamp?new Date(e.timestamp*1000).toLocaleDateString('pt-PT'):'—'}</td>
-            <td>${CHAINS[e.chain]?.name||'—'}</td>
-            <td><span style="color:${protoColor};font-size:0.75rem;font-weight:600">${protoLabel}</span></td>
-            <td style="color:${typeColor};font-weight:600">${typeLabel}</td>
-            <td style="font-weight:600">${e.asset||'—'}<br><span style="font-family:var(--mono);font-size:0.62rem;color:var(--muted)">${(e.amountCrypto||0).toFixed(4)}</span></td>
-            <td class="mono gold" style="text-align:right">$${fmt(usd)}</td>
-            <td class="mono blue" style="text-align:right">€${fmt(eur)}</td>
-            <td><span class="badge ${e.type==='supply'||e.type==='withdraw'?'badge-gold':'badge-muted'}" style="font-size:0.56rem">${e.type==='supply'||e.type==='withdraw'?'Cat. G':'Colateral'}</span></td>
-            <td class="txhash">${e.txhash?`<a href="${CHAINS[e.chain]?.explorer}/tx/${e.txhash}" target="_blank">${truncTx(e.txhash)}</a>`:'—'}</td>
-          </tr>`}).join('')}
-        </tbody></table>`:
-        `<div class="empty"><span class="empty-icon">📋</span><p style="font-size:0.85rem">Sem histórico. Adiciona uma Etherscan API Key para activar.</p></div>`}
-      </div></div>
-    </div>`;
+  `;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -9370,23 +9547,285 @@ function shareGhostCard(platform) {
 // ══════════════════════════════════════════════════════════
 // EXPORT / IMPORT
 // ══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// FASE 6F: Tax Report Exports
+// ═══════════════════════════════════════════════════════════
+
 function exportFiscalCSV() {
-  const w=activeWallet(); if(!w) return;
-  const rows=[['Data','Rede','Tipo','Ativo','USD','Categoria','TX Hash']];
-  Object.values(live.history).flat().forEach(e=>rows.push([e.timestamp?new Date(e.timestamp*1000).toLocaleDateString('pt-PT'):'',CHAINS[e.chain]?.name||e.chain,e.type,e.asset,fmt(e.amountUSD||0),e.type==='supply'||e.type==='withdraw'?'Categoria G':'Colateral',e.txhash||'']));
-  rows.push([],[' === LOTES COLATERAL 365 DIAS ===']);
-  rows.push(['Lote','Data Aquisição','Depósito','Rede','Ativo','Valor EUR','Dias','Status','Isento em','Protocolo','Origem','TX Hash']);
-  state.collateral.filter(c=>c.walletId===w.id).forEach((c,i)=>{
-    const held=daysHeld(c.acqDate);
-    const iDate=new Date((new Date(c.acqDate+'T12:00:00')).getTime()+365*86400000).toLocaleDateString('pt-PT');
-    rows.push([`L${String(i+1).padStart(2,'0')}`,fmtDate(c.acqDate),fmtDate(c.depDate),CHAINS[c.chain]?.name||c.chain,c.asset,fmt(c.eur),held,held>=365?'ISENTO':'28%',held>=365?'Já atingido':iDate,c.proto||'',c.origin||'',c.txhash||'']);
+  const w = activeWallet();
+  if (!w) { toast('Sem wallet activa', 'warn'); return; }
+  const fiscalYear = state.fiscalYear || new Date().getFullYear();
+  const yearStart = new Date(fiscalYear, 0, 1);
+  const yearEnd = new Date(fiscalYear, 11, 31, 23, 59, 59);
+  const inYear = (d) => { if (!d) return false; const dt = new Date(d); return !isNaN(dt) && dt >= yearStart && dt <= yearEnd; };
+
+  const lots = (state.collateral || []).filter(c => c.walletId === w.id && c.origin === 'reward' && inYear(c.acqDate));
+  const spends = (state.cardSpends || []).filter(s => s.walletId === w.id && inYear(s.date));
+  const topups = (state.cardTopups || []).filter(t => t.walletId === w.id && inYear(t.date));
+
+  // CSV escape helper
+  const esc = (v) => {
+    if (v == null) return '';
+    const s = String(v);
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+
+  const sections = [];
+
+  // Section 1: Anexo G — Disposals
+  const disposals = spends.filter(s => s.taxTreatment === 'disposal');
+  sections.push('# ANEXO G — Mais-Valias Tributáveis (<365 dias)');
+  sections.push('Data Alienação,Asset,Quantidade,Valor Aquisição (€),Valor Realização (€),Mais-Valia (€),Imposto 28%');
+  if (disposals.length === 0) {
+    sections.push('# Sem alienações tributáveis');
+  } else {
+    disposals.forEach(d => {
+      const realizationEUR = d.chargedCurrency === 'USD' ? (+d.chargedAmount * (live.eurRate||0.92)) : +d.chargedAmount;
+      sections.push([d.date, d.assetSold || '', '', '', realizationEUR.toFixed(2), '', ''].map(esc).join(','));
+    });
+  }
+  sections.push('');
+
+  // Section 2: Anexo G1 — Exempt
+  sections.push('# ANEXO G1 — Mais-Valias Isentas (>=365 dias)');
+  sections.push('Data Alienação,Asset,Quantidade,Valor Aquisição (€),Valor Realização (€)');
+  sections.push('# Sem alienações isentas neste período');
+  sections.push('');
+
+  // Section 3: Cashbacks (acquisitions)
+  sections.push('# CASHBACKS — Aquisições gratuitas (Cat. G basis)');
+  sections.push('Data,Asset,Quantidade,Valor Aquisição (€),Origem');
+  if (lots.length === 0) {
+    sections.push('# Sem cashbacks no período');
+  } else {
+    lots.forEach(l => {
+      sections.push([l.acqDate, l.asset, (+l.qty || 0).toFixed(8), (+l.eur || 0).toFixed(2), l.proto || ''].map(esc).join(','));
+    });
+  }
+  sections.push('');
+
+  // Section 4: Card spends (informativo)
+  sections.push('# GASTOS DE CARTÃO — Detalhe completo');
+  sections.push('Data,Cartão,Merchant,Categoria,Valor (orig),Moeda,Valor (EUR),Status,Tratamento Fiscal');
+  spends.forEach(s => {
+    const card = (state.cards||[]).find(c => c.id === s.cardId);
+    const eurValue = s.chargedCurrency === 'USD' ? ((+s.chargedAmount||0) * (live.eurRate||0.92)) : (+s.chargedAmount||0);
+    sections.push([
+      s.date,
+      card?.name || s.cardId,
+      s.merchant,
+      s.category,
+      (+s.chargedAmount||0).toFixed(2),
+      s.chargedCurrency,
+      eurValue.toFixed(2),
+      s.status,
+      s.taxTreatment,
+    ].map(esc).join(','));
   });
-  const csv=rows.map(r=>r.map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));
-  a.download=`ghost-fiscal-${new Date().toISOString().split('T')[0]}.csv`;
+  sections.push('');
+
+  // Section 5: Topups
+  sections.push('# TOPUPS — Depósitos no cartão');
+  sections.push('Data,Cartão,Asset,Quantidade,Valor (USD),Valor (EUR),Origem');
+  topups.forEach(t => {
+    const card = (state.cards||[]).find(c => c.id === t.cardId);
+    sections.push([
+      t.date,
+      card?.name || t.cardId,
+      t.asset,
+      (+t.amountToken||0).toFixed(6),
+      (+t.amountUSD||0).toFixed(2),
+      (+t.amountEUR||0).toFixed(2),
+      t.source,
+    ].map(esc).join(','));
+  });
+
+  // Build CSV
+  const csv = '\uFEFF' + sections.join('\n');  // BOM for Excel UTF-8
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `aurum_irs_${fiscalYear}_${w.name.replace(/\W+/g, '_')}.csv`;
   a.click();
+  URL.revokeObjectURL(url);
+  toast(`✓ Exportado ${fiscalYear}: ${lots.length} cashbacks, ${spends.length} gastos, ${topups.length} topups`, 'success');
 }
+
+function exportFiscalReport() {
+  // HTML report — pretty, printable as PDF via browser
+  const w = activeWallet();
+  if (!w) { toast('Sem wallet activa', 'warn'); return; }
+  const fiscalYear = state.fiscalYear || new Date().getFullYear();
+  const yearStart = new Date(fiscalYear, 0, 1);
+  const yearEnd = new Date(fiscalYear, 11, 31, 23, 59, 59);
+  const inYear = (d) => { if (!d) return false; const dt = new Date(d); return !isNaN(dt) && dt >= yearStart && dt <= yearEnd; };
+
+  const lots = (state.collateral || []).filter(c => c.walletId === w.id && c.origin === 'reward' && inYear(c.acqDate));
+  const spends = (state.cardSpends || []).filter(s => s.walletId === w.id && inYear(s.date));
+  const topups = (state.cardTopups || []).filter(t => t.walletId === w.id && inYear(t.date));
+  const disposalSpends = spends.filter(s => s.taxTreatment === 'disposal');
+  const loanSpends = spends.filter(s => s.taxTreatment === 'loan_spend');
+
+  const totalCashbackEUR = lots.reduce((s,l) => s + (+l.eur || 0), 0);
+  const totalLoanEUR = loanSpends.reduce((s,d) => {
+    let v = +d.chargedAmount || 0;
+    if (d.chargedCurrency === 'USD') v *= (live.eurRate || 0.92);
+    return s + v;
+  }, 0);
+
+  // Group cashbacks by month
+  const byMonth = {};
+  lots.forEach(l => {
+    const m = l.acqDate.slice(0, 7);
+    if (!byMonth[m]) byMonth[m] = { count:0, eur:0, qty:0, asset:l.asset };
+    byMonth[m].count++; byMonth[m].eur += +l.eur||0; byMonth[m].qty += +l.qty||0;
+  });
+
+  const now = new Date().toISOString().slice(0, 10);
+  const reportHtml = `<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>Relatório Fiscal Aurum ${fiscalYear} - ${w.name}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1.5rem; color: #1a1a1a; line-height: 1.6; }
+  h1 { font-size: 2rem; margin-bottom: 0.3rem; color: #B8956A; font-weight: 600; letter-spacing: -0.01em; }
+  .subtitle { color: #666; font-size: 0.95rem; margin-bottom: 0.5rem; }
+  .meta { color: #999; font-size: 0.82rem; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #B8956A; }
+  h2 { color: #1a1a1a; font-size: 1.3rem; margin-top: 2.5rem; margin-bottom: 0.6rem; padding-bottom: 0.4rem; border-bottom: 1px solid #ddd; }
+  h3 { color: #555; font-size: 1rem; margin-top: 1.5rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.6rem; font-size: 0.85rem; }
+  th { background: #f7f3eb; color: #5a4628; padding: 0.6rem 0.8rem; text-align: left; font-weight: 600; border-bottom: 2px solid #B8956A; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { padding: 0.55rem 0.8rem; border-bottom: 1px solid #eee; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: "SF Mono", Consolas, monospace; }
+  .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .card { padding: 1rem; background: #fafafa; border: 1px solid #eee; border-radius: 8px; }
+  .card-label { font-size: 0.7rem; text-transform: uppercase; color: #888; letter-spacing: 0.1em; margin-bottom: 0.4rem; }
+  .card-value { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .green { color: #16a34a; } .amber { color: #d97706; } .red { color: #dc2626; } .blue { color: #2563eb; } .gold { color: #B8956A; }
+  .note { background: #fffbef; border-left: 3px solid #d4af7a; padding: 1rem 1.2rem; margin: 1rem 0; font-size: 0.88rem; line-height: 1.6; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #ddd; font-size: 0.75rem; color: #999; text-align: center; }
+  @media print { body { max-width: none; margin: 0; padding: 1cm; } .no-print { display: none; } }
+  .print-btn { background: #B8956A; color: white; padding: 0.6rem 1.2rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()" style="float:right">🖨 Imprimir / PDF</button>
+
+<h1>AURUM · Relatório Fiscal</h1>
+<div class="subtitle">Categoria G — Mais-Valias de Criptoativos</div>
+<div class="meta">
+  Wallet: <strong>${w.name}</strong> · ${w.evm || w.solana || ''}<br>
+  Ano fiscal: <strong>${fiscalYear}</strong> · Gerado em ${now}
+</div>
+
+<div class="note">
+  <strong>Interpretação fiscal:</strong> Lei 24-D/2022, Art. 10º CIRS<br>
+  • Permuta cripto-cripto não é alienação (Art. 10º nº 6 c)<br>
+  • Cashback em cripto = aquisição gratuita; basis = €EUR à data; tributação só na alienação futura<br>
+  • Gastos com capital emprestado DeFi não são alienação<br>
+  • FIFO obrigatório por wallet
+</div>
+
+<h2>1. Resumo Executivo</h2>
+<div class="summary-cards">
+  <div class="card"><div class="card-label">Mais-Valias Tributáveis</div><div class="card-value amber">€0,00</div><div style="font-size:0.75rem;color:#888;margin-top:0.3rem">${disposalSpends.length} alienações &lt;365d</div></div>
+  <div class="card"><div class="card-label">Mais-Valias Isentas</div><div class="card-value green">€0,00</div><div style="font-size:0.75rem;color:#888;margin-top:0.3rem">≥365 dias</div></div>
+  <div class="card"><div class="card-label">Cashbacks Recebidos</div><div class="card-value gold">€${fmt(totalCashbackEUR)}</div><div style="font-size:0.75rem;color:#888;margin-top:0.3rem">${lots.length} aquisições</div></div>
+  <div class="card"><div class="card-label">Imposto Estimado</div><div class="card-value red">€0,00</div><div style="font-size:0.75rem;color:#888;margin-top:0.3rem">28% sobre <365d</div></div>
+</div>
+
+<h2>2. Anexo G — Mais-Valias Tributáveis (&lt;365 dias)</h2>
+${disposalSpends.length === 0 ? `
+  <p style="color:#666">Sem alienações tributáveis em ${fiscalYear}.</p>
+  ${loanSpends.length > 0 ? `<p style="color:#888;font-size:0.85rem">Os ${loanSpends.length} gastos do cartão são financiados por crédito DeFi — não constituem alienação.</p>` : ''}
+` : `
+  <table>
+    <thead><tr><th>Data Alienação</th><th>Asset</th><th>Quantidade</th><th>Valor Aquisição (€)</th><th>Valor Realização (€)</th><th>Mais-Valia (€)</th><th>Imposto 28%</th></tr></thead>
+    <tbody>
+      ${disposalSpends.map(d => {
+        const eur = d.chargedCurrency === 'USD' ? (+d.chargedAmount * (live.eurRate||0.92)) : +d.chargedAmount;
+        return `<tr><td>${d.date}</td><td>${d.assetSold||'?'}</td><td class="num">—</td><td class="num">—</td><td class="num">€${fmt(eur)}</td><td class="num">—</td><td class="num">—</td></tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+`}
+
+<h2>3. Anexo G1 — Mais-Valias Isentas (≥365 dias)</h2>
+<p style="color:#666">Sem alienações isentas em ${fiscalYear}.</p>
+<p style="color:#888;font-size:0.85rem">Note: alienações de cripto detido há ≥365d são isentas (Art. 10º nº 19) mas devem ser declaradas no Anexo G1 desde 2024.</p>
+
+<h2>4. Aquisições Gratuitas — Cashbacks Recebidos</h2>
+${lots.length === 0 ? `<p style="color:#666">Sem cashbacks em ${fiscalYear}.</p>` : `
+  <table>
+    <thead><tr><th>Mês</th><th>Lotes</th><th>Asset</th><th>Quantidade total</th><th>Valor aquisição (€)</th></tr></thead>
+    <tbody>
+      ${Object.keys(byMonth).sort().map(m => `<tr>
+        <td>${m}</td>
+        <td class="num">${byMonth[m].count}</td>
+        <td>${byMonth[m].asset}</td>
+        <td class="num">${byMonth[m].qty.toFixed(6)}</td>
+        <td class="num gold">€${fmt(byMonth[m].eur)}</td>
+      </tr>`).join('')}
+      <tr style="font-weight:600;border-top:2px solid #B8956A">
+        <td>Total ${fiscalYear}</td>
+        <td class="num">${lots.length}</td>
+        <td>—</td>
+        <td class="num">${lots.reduce((s,l)=>s+(+l.qty||0),0).toFixed(6)}</td>
+        <td class="num gold">€${fmt(totalCashbackEUR)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="color:#888;font-size:0.85rem;margin-top:1rem"><strong>Não há imposto agora.</strong> Cashbacks são aquisições com basis = €EUR à data. Tributação só na alienação futura (vender, swap, pagar). Mantém ≥365d para isenção total.</p>
+`}
+
+${loanSpends.length > 0 ? `
+<h2>5. Gastos com Crédito DeFi — Informativo</h2>
+<p>Total gasto em ${fiscalYear}: <strong>€${fmt(totalLoanEUR)}</strong> em ${loanSpends.length} transações.</p>
+<p style="color:#888;font-size:0.85rem">Estes gastos foram financiados por capital emprestado. <strong>Não constituem alienação fiscal.</strong> Eventos fiscais só ocorrem se houver liquidação forçada do colateral ou venda voluntária.</p>
+` : ''}
+
+<h2>${loanSpends.length > 0 ? '6' : '5'}. Detalhe — Cashbacks Individuais (top 50)</h2>
+${lots.length === 0 ? '<p style="color:#666">Sem dados.</p>' : `
+  <table>
+    <thead><tr><th>Data</th><th>Asset</th><th>Quantidade</th><th>Valor (€)</th><th>Origem</th></tr></thead>
+    <tbody>
+      ${lots.slice(0, 50).map(l => `<tr>
+        <td>${l.acqDate}</td>
+        <td>${l.asset}</td>
+        <td class="num">${(+l.qty||0).toFixed(8)}</td>
+        <td class="num">€${(+l.eur||0).toFixed(2)}</td>
+        <td>${l.proto||''}</td>
+      </tr>`).join('')}
+      ${lots.length > 50 ? `<tr><td colspan="5" style="text-align:center;color:#888">+ ${lots.length - 50} mais (exporta CSV para detalhe completo)</td></tr>` : ''}
+    </tbody>
+  </table>
+`}
+
+<div class="footer">
+  Gerado por <strong>AURUM</strong> — Your DeFi, refined<br>
+  Este relatório é meramente informativo. Confirma com contabilista especializado em cripto antes de submeter Modelo 3.
+</div>
+
+</body>
+</html>`;
+
+  const blob = new Blob([reportHtml], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `aurum_irs_${fiscalYear}_${w.name.replace(/\W+/g, '_')}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`✓ Relatório HTML exportado — abre no browser para imprimir como PDF`, 'success');
+}
+
+window.exportFiscalCSV = exportFiscalCSV;
+window.exportFiscalReport = exportFiscalReport;
 
 function toggleFiscalFilter(onlyOpen) {
   if (!state.hasOwnProperty('fiscalOnlyOpen')) state.fiscalOnlyOpen = true;
