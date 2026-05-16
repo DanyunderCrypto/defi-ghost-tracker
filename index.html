@@ -3397,6 +3397,270 @@ const storageManager = (() => {
 window.aurumStorage = storageManager;
 window.aurumIDB = idb;
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2B — ERROR HANDLING & DIAGNOSTICS (Sprint 3)                   ║
+// ║                                                                          ║
+// ║  Local-first error capture. Zero external services. Privacy preserved.  ║
+// ║                                                                          ║
+// ║  What's captured:                                                        ║
+// ║   - Uncaught exceptions (window.onerror)                                 ║
+// ║   - Unhandled promise rejections                                         ║
+// ║   - Explicit logger.error() calls from try/catch                         ║
+// ║   - Fetch failures (via safeFetch)                                       ║
+// ║                                                                          ║
+// ║  What's NEVER captured:                                                  ║
+// ║   - Wallet addresses, transaction hashes, amounts                        ║
+// ║   - API keys, tokens, secrets                                            ║
+// ║   - Personal info (names, emails)                                        ║
+// ║                                                                          ║
+// ║  Storage: in-memory rolling buffer (50) + IDB persistence                ║
+// ║  User can: view, copy report to clipboard, clear, opt to share          ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+const ERROR_BUFFER_SIZE = 50;
+const ERROR_IDB_KEY = 'error_log';
+const APP_VERSION = '3.0.0';  // bump when releasing
+
+// Patterns to scrub from messages (PII protection)
+const SCRUB_PATTERNS = [
+  // ORDER MATTERS: longest/most-specific patterns first to avoid partial matches
+  // Transaction hashes (64 hex chars after 0x) — must come BEFORE address pattern
+  { pattern: /0x[a-fA-F0-9]{64}\b/g, replacement: '0x…[TXHASH]' },
+  // EVM addresses (40 hex chars after 0x) — checked after txhash
+  { pattern: /0x[a-fA-F0-9]{40}\b/g, replacement: '0x…[ADDR]' },
+  // Bitcoin addresses — must come BEFORE Solana pattern (BTC legacy addrs match Solana regex)
+  { pattern: /\b(bc1[a-zA-HJ-NP-Z0-9]{25,89}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b/g, replacement: '[BTC_ADDR]' },
+  // Solana addresses (base58, 32-44 chars) — more permissive, after BTC
+  { pattern: /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g, replacement: '[SOL_ADDR]' },
+  // Long numbers that could be balances/amounts (10+ digits)
+  { pattern: /\b\d{10,}\b/g, replacement: '[NUM]' },
+  // API keys: long alphanumeric with mixed case + digits (very conservative)
+  { pattern: /\b[a-zA-Z0-9_-]{40,}\b/g, replacement: (m) => {
+    return /[A-Z]/.test(m) && /[a-z]/.test(m) && /[0-9]/.test(m) ? '[KEY]' : m;
+  }},
+];
+
+function scrubMessage(msg) {
+  if (typeof msg !== 'string') {
+    try { msg = String(msg); } catch (e) { return '[unstringifiable]'; }
+  }
+  let out = msg;
+  for (const { pattern, replacement } of SCRUB_PATTERNS) {
+    try {
+      out = out.replace(pattern, replacement);
+    } catch (e) { /* ignore regex issues */ }
+  }
+  // Hard cap message length
+  if (out.length > 1000) out = out.slice(0, 1000) + '…[truncated]';
+  return out;
+}
+
+const errorLogger = (() => {
+  let _buffer = [];       // in-memory rolling
+  let _persistTimer = null;
+  let _initialized = false;
+
+  function _persist() {
+    // Debounced async write to IDB (best effort)
+    clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(() => {
+      try {
+        if (typeof idb !== 'undefined' && idb?.set) {
+          idb.set(ERROR_IDB_KEY, _buffer.slice()).catch(() => {});
+        }
+      } catch (e) { /* never throw from logger */ }
+    }, 1000);
+  }
+
+  async function _loadFromIDB() {
+    try {
+      if (typeof idb !== 'undefined' && idb?.get) {
+        const stored = await idb.get(ERROR_IDB_KEY);
+        if (Array.isArray(stored)) {
+          _buffer = stored.slice(-ERROR_BUFFER_SIZE);
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function capture(level, message, context = {}) {
+    try {
+      const entry = {
+        t: Date.now(),
+        level,                                 // 'error' | 'warn' | 'info'
+        msg: scrubMessage(message),
+        ctx: typeof context === 'object' ? Object.keys(context).reduce((acc, k) => {
+          const v = context[k];
+          acc[k] = typeof v === 'string' ? scrubMessage(v) :
+                   typeof v === 'object' ? '[obj]' : v;
+          return acc;
+        }, {}) : {},
+        // Browser context (no PII)
+        v: APP_VERSION,
+        ua: (navigator.userAgent || '').slice(0, 100),
+      };
+      _buffer.push(entry);
+      if (_buffer.length > ERROR_BUFFER_SIZE) {
+        _buffer = _buffer.slice(-ERROR_BUFFER_SIZE);
+      }
+      _persist();
+    } catch (e) {
+      // Logger itself must never crash the app
+      try { console.warn('[logger] capture failed:', e.message); } catch (_) {}
+    }
+  }
+
+  function init() {
+    if (_initialized) return;
+    _initialized = true;
+
+    // Load any existing log from previous sessions
+    _loadFromIDB();
+
+    // Global error handler
+    window.addEventListener('error', (event) => {
+      try {
+        capture('error', event.message || 'Uncaught error', {
+          src: event.filename ? event.filename.split('/').pop().slice(0, 50) : '?',
+          line: event.lineno,
+          col: event.colno,
+          type: 'uncaught',
+        });
+      } catch (e) {}
+    });
+
+    // Unhandled promise rejection
+    window.addEventListener('unhandledrejection', (event) => {
+      try {
+        const reason = event.reason;
+        let msg = 'Unhandled rejection';
+        if (reason instanceof Error) msg = reason.message;
+        else if (typeof reason === 'string') msg = reason;
+        capture('error', msg, { type: 'unhandled_rejection' });
+      } catch (e) {}
+    });
+
+    // Hook console.error (non-destructive — keeps original behavior)
+    const origConsoleError = console.error;
+    console.error = function(...args) {
+      try {
+        const msg = args.map(a =>
+          a instanceof Error ? a.message :
+          typeof a === 'string' ? a :
+          typeof a === 'object' ? '[obj]' : String(a)
+        ).join(' ');
+        capture('error', msg, { type: 'console.error' });
+      } catch (e) {}
+      return origConsoleError.apply(this, args);
+    };
+  }
+
+  return {
+    init,
+    error: (msg, ctx) => capture('error', msg, ctx),
+    warn:  (msg, ctx) => capture('warn',  msg, ctx),
+    info:  (msg, ctx) => capture('info',  msg, ctx),
+    getRecent(n = ERROR_BUFFER_SIZE) {
+      return _buffer.slice(-n).reverse();  // newest first
+    },
+    clear() {
+      _buffer = [];
+      try { idb?.set?.(ERROR_IDB_KEY, []).catch(() => {}); } catch (e) {}
+    },
+    count() { return _buffer.length; },
+    countByLevel() {
+      const out = { error: 0, warn: 0, info: 0 };
+      for (const e of _buffer) if (out[e.level] !== undefined) out[e.level]++;
+      return out;
+    },
+    // Build a copy-pasteable report
+    buildReport() {
+      const fmtTime = (t) => new Date(t).toISOString();
+      const lines = [];
+      lines.push(`AURUM DIAGNOSTIC REPORT`);
+      lines.push(`Generated: ${new Date().toISOString()}`);
+      lines.push(`App version: ${APP_VERSION}`);
+      lines.push(`Browser: ${(navigator.userAgent || '').slice(0, 120)}`);
+      lines.push(`Language: ${navigator.language || '?'}`);
+      lines.push(`Platform: ${navigator.platform || '?'}`);
+      lines.push(`Errors captured: ${_buffer.length}`);
+      try {
+        const counts = this.countByLevel();
+        lines.push(`  errors: ${counts.error}, warns: ${counts.warn}, infos: ${counts.info}`);
+      } catch (e) {}
+      lines.push('');
+      lines.push('--- RECENT EVENTS (newest first) ---');
+      const recent = _buffer.slice(-30).reverse();
+      if (recent.length === 0) {
+        lines.push('(no events recorded)');
+      } else {
+        recent.forEach((e, i) => {
+          lines.push(`[${i+1}] ${fmtTime(e.t)} ${e.level.toUpperCase()}`);
+          lines.push(`    ${e.msg}`);
+          if (e.ctx && Object.keys(e.ctx).length) {
+            lines.push(`    ctx: ${JSON.stringify(e.ctx)}`);
+          }
+        });
+      }
+      return lines.join('\n');
+    },
+  };
+})();
+
+// Safe wrappers — use these in app code instead of raw try/catch when you want logging
+function safeCall(fn, fallback, label = 'safeCall') {
+  try {
+    return fn();
+  } catch (err) {
+    errorLogger.error(`${label}: ${err.message}`, { type: 'safeCall' });
+    return fallback;
+  }
+}
+
+async function safeAsync(fn, fallback, label = 'safeAsync') {
+  try {
+    return await fn();
+  } catch (err) {
+    errorLogger.error(`${label}: ${err.message}`, { type: 'safeAsync' });
+    return fallback;
+  }
+}
+
+async function safeFetch(url, opts = {}, label = 'fetch') {
+  const timeout = opts.timeout || 30000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...opts, signal: controller.signal });
+    clearTimeout(timer);
+    if (!response.ok) {
+      // Scrub URL of query params/keys
+      const safeUrl = url.split('?')[0].slice(0, 80);
+      errorLogger.warn(`${label} ${response.status}: ${safeUrl}`, {
+        status: response.status,
+        type: 'fetch_error',
+      });
+    }
+    return response;
+  } catch (err) {
+    clearTimeout(timer);
+    const safeUrl = url.split('?')[0].slice(0, 80);
+    errorLogger.error(`${label} failed: ${err.message}`, {
+      url: safeUrl,
+      type: err.name === 'AbortError' ? 'timeout' : 'fetch_fail',
+    });
+    throw err;
+  }
+}
+
+// Initialize as early as possible — but ONLY after idb is defined (above)
+errorLogger.init();
+
+// Expose for console debugging
+window.aurumLogger = errorLogger;
+window.aurumSafe = { safeCall, safeAsync, safeFetch };
+
+
 
 async function loadState() {
   // Sprint 2: tiered load with IDB → LS v2 → LS v1 → fresh fallback chain.
@@ -6431,6 +6695,134 @@ function renderFiscal(w) {
 // ─────────────────────────────────────────────────
 // Sprint 2: Diagnostics & Backups (UI functions)
 // ─────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────
+// Sprint 3: Error log UI functions
+// ─────────────────────────────────────────────────
+function refreshErrorLog() {
+  const el = document.getElementById('errorLogPanel');
+  if (!el) return;
+  try {
+    const recent = errorLogger.getRecent(50);
+    const counts = errorLogger.countByLevel();
+    const fmtTime = (t) => {
+      const d = new Date(t);
+      const today = new Date();
+      const isToday = d.toDateString() === today.toDateString();
+      const time = d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return isToday ? time : d.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' }) + ' ' + time;
+    };
+    const levelStyle = {
+      error: 'color:var(--red)',
+      warn:  'color:var(--amber)',
+      info:  'color:var(--text-muted)',
+    };
+    const levelIcon = { error: '✗', warn: '⚠', info: 'ℹ' };
+
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:0.8rem;margin-bottom:1rem">
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">Erros</div>
+          <div style="font-family:var(--num);font-weight:600;color:${counts.error>0?'var(--red)':'var(--green)'};font-size:1.3rem">${counts.error}</div>
+        </div>
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">Avisos</div>
+          <div style="font-family:var(--num);font-weight:600;color:${counts.warn>0?'var(--amber)':'var(--text)'};font-size:1.3rem">${counts.warn}</div>
+        </div>
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">App version</div>
+          <div style="font-family:var(--num);font-weight:600;color:var(--gold);font-size:1.05rem">v${APP_VERSION}</div>
+        </div>
+      </div>
+      ${recent.length === 0 ? `
+        <div style="padding:1.5rem 0;text-align:center;font-size:0.85rem;color:var(--text-muted)">
+          <span style="font-size:1.3rem">✓</span><br>
+          Sem erros registados nesta sessão.
+        </div>
+      ` : `
+        <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem">Eventos recentes (${recent.length} de ${ERROR_BUFFER_SIZE} máx, mais recentes primeiro)</div>
+        <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--bg)">
+          ${recent.map(e => `
+            <div style="padding:0.55rem 0.85rem;border-bottom:1px solid rgba(255,255,255,0.04);font-size:0.78rem;line-height:1.5">
+              <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:flex-start">
+                <span style="${levelStyle[e.level]||''};font-weight:600;flex-shrink:0">${levelIcon[e.level]||''} ${e.level.toUpperCase()}</span>
+                <span style="font-family:var(--mono);font-size:0.68rem;color:var(--text-muted);flex-shrink:0">${fmtTime(e.t)}</span>
+              </div>
+              <div style="margin-top:0.25rem;color:var(--text);word-break:break-word">${escapeHtml(e.msg)}</div>
+              ${e.ctx && Object.keys(e.ctx).length ? `
+                <div style="margin-top:0.2rem;font-family:var(--mono);font-size:0.68rem;color:var(--text-muted)">
+                  ${Object.entries(e.ctx).map(([k,v]) => `${k}=${escapeHtml(String(v))}`).join(' · ')}
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `}
+    `;
+  } catch (err) {
+    el.innerHTML = `<div style="color:var(--red);font-size:0.85rem">Falha ao carregar log: ${err.message}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+async function copyErrorReport() {
+  try {
+    const report = errorLogger.buildReport();
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(report);
+      toast('✓ Relatório copiado — cola num email ou Discord para reportar', 'success');
+    } else {
+      // Fallback: use a temp textarea
+      const ta = document.createElement('textarea');
+      ta.value = report;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      toast('✓ Relatório copiado', 'success');
+    }
+  } catch (err) {
+    toast('Falha ao copiar: ' + err.message, 'warn');
+  }
+}
+
+function clearErrorLog() {
+  if (!confirm('Apagar o log de erros? Esta acção não pode ser desfeita.')) return;
+  try {
+    errorLogger.clear();
+    toast('✓ Log limpo', 'success');
+    refreshErrorLog();
+  } catch (err) {
+    toast('Falha: ' + err.message, 'warn');
+  }
+}
+
+// Hook into Settings tab to auto-refresh error log too
+const _origShowTab_log = window.showTab;
+if (typeof _origShowTab_log === 'function' && !window._errorLogHookInstalled) {
+  window._errorLogHookInstalled = true;
+  const prev = window.showTab;
+  window.showTab = function(name) {
+    const r = prev.apply(this, arguments);
+    if (name === 'settings') {
+      setTimeout(() => refreshErrorLog(), 150);
+    }
+    return r;
+  };
+}
+
+window.refreshErrorLog = refreshErrorLog;
+window.copyErrorReport = copyErrorReport;
+window.clearErrorLog = clearErrorLog;
+
 async function refreshDiagnostics() {
   const el = document.getElementById('diagPanel');
   if (!el) return;
@@ -6711,7 +7103,7 @@ function renderSettings(w) {
       </div>
     </div>
 
-    <!-- ── Diagnostics & Backups (Sprint 2) ── -->
+    <!-- ── Diagnostics & Backups (Sprint 2 + 3) ── -->
     <div class="panel" style="margin-bottom:1rem">
       <div class="panel-head">
         <span class="panel-title">🛡️ Diagnostics & Backups</span>
@@ -6735,8 +7127,36 @@ function renderSettings(w) {
           <span>ℹ</span>
           <div>
             <strong>O Aurum guarda os teus dados no browser</strong> (IndexedDB + localStorage como fallback).
-            Não há servidor, ninguém os vê. Auto-backup mantém as últimas 5 versões — podes restaurar a qualquer momento.<br>
+            Não há servidor, ninguém os vê. Auto-backup mantém as últimas 5 versões.<br>
             <strong>Exporta um backup completo</strong> para guardar em segurança (Drive, Dropbox, etc).
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Error Log (Sprint 3) ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head">
+        <span class="panel-title">📋 Log de Erros & Avisos</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Local · zero tracking</span>
+      </div>
+      <div class="panel-body">
+        <div id="errorLogPanel">
+          <div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0">
+            <span style="opacity:0.7">A carregar log…</span>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1rem">
+          <button class="btn btn-outline btn-sm" onclick="refreshErrorLog()">↺ Atualizar</button>
+          <button class="btn btn-outline btn-sm" onclick="copyErrorReport()">📋 Copiar Relatório</button>
+          <button class="btn btn-danger btn-sm" onclick="clearErrorLog()">🗑 Limpar Log</button>
+        </div>
+        <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
+          <span>🔒</span>
+          <div>
+            <strong>Privacidade total.</strong> Os erros ficam <em>só no teu browser</em> (IndexedDB local).
+            Nada é enviado para servidores. Endereços, valores e chaves são automaticamente removidos antes de qualquer log.<br>
+            Se reportares um bug, podes <strong>"Copiar Relatório"</strong> e colar no email/Discord para ajudar a debugar.
           </div>
         </div>
       </div>
