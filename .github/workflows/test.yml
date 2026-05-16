@@ -1,0 +1,32 @@
+name: Aurum Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Domain logic tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Sync modules from HTML
+        working-directory: aurum-tests
+        run: python3 scripts/sync-from-html.py ../index.html
+
+      - name: Run test suite
+        working-directory: aurum-tests
+        run: node tests/run-all.js
