@@ -2321,6 +2321,7 @@ body.stealth-mode .stealth-badge {
     <button class="nav-tab active" onclick="showTab('dashboard')">Dashboard</button>
     <button class="nav-tab" onclick="showTab('protocols')">Posições</button>
     <button class="nav-tab" onclick="showTab('cards')">Cartões</button>
+    <button class="nav-tab" onclick="showTab('history')">Histórico</button>
     <button class="nav-tab" onclick="showTab('strategy')">365 Dias</button>
     <button class="nav-tab" onclick="showTab('simulator')">Simulador</button>
     <button class="nav-tab" onclick="showTab('wallets')">Wallets</button>
@@ -3660,6 +3661,370 @@ errorLogger.init();
 window.aurumLogger = errorLogger;
 window.aurumSafe = { safeCall, safeAsync, safeFetch };
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2C — UNIVERSAL INDEXER (Sprint 4)                              ║
+// ║                                                                          ║
+// ║  Fetches all on-chain activity for a wallet across supported EVM chains ║
+// ║  using Alchemy's getAssetTransfers API. Produces UniversalEvents that   ║
+// ║  feed into the classifier (Sprint 5) and tax engine (Sprint 8).         ║
+// ║                                                                          ║
+// ║  Architecture:                                                           ║
+// ║    AlchemyAdapter   — wraps getAssetTransfers with pagination/retry     ║
+// ║    UniversalIndexer — orchestrates per-chain fetch, merge, dedupe       ║
+// ║    EventClassifier  — basic heuristic (refined in Sprint 5)             ║
+// ║                                                                          ║
+// ║  State storage: state.events[] — UniversalEvent[] (Sprint 2.5 → indexed) ║
+// ║                                                                          ║
+// ║  Tax considerations:                                                     ║
+// ║    - Indexes ALL history (no 2023 cutoff) — required for FIFO + G1      ║
+// ║    - Self-transfers detected as 'self' → non-taxable                    ║
+// ║    - Future: pre-2023 lots marked exempt_pre_2023 (Sprint 8)            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+// Alchemy subdomain per chain (used to build RPC URL)
+const ALCHEMY_SUBDOMAINS = {
+  eth:      'eth-mainnet',
+  base:     'base-mainnet',
+  arbitrum: 'arb-mainnet',
+  optimism: 'opt-mainnet',
+  polygon:  'polygon-mainnet',
+  linea:    'linea-mainnet',
+  scroll:   'scroll-mainnet',
+  // gnosis not supported by Alchemy — needs separate provider
+};
+
+// Asset transfer categories supported by Alchemy
+const TRANSFER_CATEGORIES = ['external', 'internal', 'erc20', 'erc721', 'erc1155'];
+
+// Chains supported in Sprint 4 (will expand)
+const INDEXER_SUPPORTED_CHAINS = ['eth', 'base', 'arbitrum', 'optimism'];
+
+// ─────────────────────────────────────────────────
+// AlchemyAdapter — getAssetTransfers wrapper
+// ─────────────────────────────────────────────────
+const alchemyAdapter = (() => {
+  const RATE_LIMIT_DELAY_MS = 200;  // 5 req/s max
+  let _lastCallAt = 0;
+
+  function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function _throttle() {
+    const sinceLast = Date.now() - _lastCallAt;
+    if (sinceLast < RATE_LIMIT_DELAY_MS) {
+      await _delay(RATE_LIMIT_DELAY_MS - sinceLast);
+    }
+    _lastCallAt = Date.now();
+  }
+
+  function _alchemyUrl(chain, apiKey) {
+    const subdomain = ALCHEMY_SUBDOMAINS[chain];
+    if (!subdomain || !apiKey) return null;
+    return `https://${subdomain}.g.alchemy.com/v2/${apiKey}`;
+  }
+
+  // Single getAssetTransfers call with retry
+  async function _call(chain, params, apiKey, attempt = 0) {
+    const url = _alchemyUrl(chain, apiKey);
+    if (!url) throw new Error(`No Alchemy URL for chain ${chain}`);
+    await _throttle();
+
+    try {
+      const res = await safeFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'alchemy_getAssetTransfers',
+          params: [params],
+        }),
+        timeout: 30000,
+      }, `alchemy.${chain}`);
+
+      if (!res.ok) {
+        // Retry on 429 (rate limit) and 5xx
+        if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+          const backoff = Math.pow(2, attempt) * 1000;
+          await _delay(backoff);
+          return _call(chain, params, apiKey, attempt + 1);
+        }
+        throw new Error(`Alchemy ${chain} HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(`Alchemy ${chain} error: ${data.error.message || JSON.stringify(data.error)}`);
+      }
+      return data.result;
+    } catch (err) {
+      if (attempt < 3 && !err.message.includes('AbortError')) {
+        const backoff = Math.pow(2, attempt) * 1000;
+        await _delay(backoff);
+        return _call(chain, params, apiKey, attempt + 1);
+      }
+      throw err;
+    }
+  }
+
+  // Get all transfers for an address on a chain (paginated)
+  async function getTransfersForAddress(address, chain, apiKey, opts = {}) {
+    if (!apiKey) {
+      return { transfers: [], skipped: true, reason: 'No Alchemy API key' };
+    }
+    if (!ALCHEMY_SUBDOMAINS[chain]) {
+      return { transfers: [], skipped: true, reason: `Chain ${chain} not supported by Alchemy` };
+    }
+
+    const addrLower = String(address).toLowerCase();
+    const baseParams = {
+      category: TRANSFER_CATEGORIES,
+      withMetadata: true,
+      excludeZeroValue: true,
+      maxCount: '0x3e8',  // 1000 in hex
+    };
+    if (opts.fromBlock) baseParams.fromBlock = opts.fromBlock;
+    if (opts.toBlock) baseParams.toBlock = opts.toBlock;
+
+    // Fetch incoming (toAddress) + outgoing (fromAddress) separately
+    const allTransfers = [];
+    let totalCalls = 0;
+
+    for (const direction of ['from', 'to']) {
+      let pageKey = undefined;
+      let page = 0;
+      const maxPages = 10;  // safety cap (10K transfers per chain)
+
+      while (page < maxPages) {
+        const params = { ...baseParams };
+        if (direction === 'from') params.fromAddress = addrLower;
+        else params.toAddress = addrLower;
+        if (pageKey) params.pageKey = pageKey;
+
+        try {
+          const result = await _call(chain, params, apiKey);
+          totalCalls++;
+
+          if (result?.transfers) {
+            allTransfers.push(...result.transfers.map(t => ({ ...t, _direction: direction })));
+          }
+          if (!result?.pageKey) break;  // last page
+          pageKey = result.pageKey;
+          page++;
+        } catch (err) {
+          errorLogger.error(`alchemy.getTransfers ${chain} ${direction}: ${err.message}`,
+                            { chain, direction, page });
+          break;
+        }
+      }
+    }
+
+    return { transfers: allTransfers, skipped: false, calls: totalCalls };
+  }
+
+  return {
+    getTransfersForAddress,
+    isSupported: (chain) => !!ALCHEMY_SUBDOMAINS[chain],
+  };
+})();
+
+// ─────────────────────────────────────────────────
+// UniversalIndexer — orchestrates indexing per wallet
+// ─────────────────────────────────────────────────
+const universalIndexer = (() => {
+
+  // Convert raw Alchemy transfer to UniversalEvent
+  function _normalizeTransfer(raw, chain, walletAddress) {
+    const addrLower = walletAddress.toLowerCase();
+    const fromLower = (raw.from || '').toLowerCase();
+    const toLower = (raw.to || '').toLowerCase();
+
+    // Direction
+    let direction = 'unknown';
+    if (fromLower === addrLower && toLower === addrLower) direction = 'self';
+    else if (fromLower === addrLower) direction = 'out';
+    else if (toLower === addrLower) direction = 'in';
+
+    // Counterparty
+    const counterpartyAddr = direction === 'in' ? raw.from : direction === 'out' ? raw.to : '';
+
+    // Amount: raw.value (as decimal number) or rawContract.value (hex with decimal info)
+    let amount = 0;
+    if (raw.value !== null && raw.value !== undefined) {
+      amount = parseFloat(raw.value) || 0;
+    }
+
+    // Timestamp
+    const blockTimestamp = raw.metadata?.blockTimestamp;
+    let ts = 0, dateStr = '';
+    if (blockTimestamp) {
+      ts = Math.floor(new Date(blockTimestamp).getTime() / 1000);
+      dateStr = blockTimestamp.slice(0, 10);
+    }
+
+    return {
+      id: `evm:${chain}:${walletAddress}:${raw.hash}:${raw.uniqueId || raw.asset || ''}`,
+      chain,
+      txHash: raw.hash,
+      blockNumber: parseInt(raw.blockNum, 16),
+      timestamp: ts,
+      date: dateStr,
+      walletAddress: addrLower,
+      type: 'unknown',  // will be classified below
+      direction,
+      // Asset info
+      asset: raw.asset || 'ETH',
+      assetContract: raw.rawContract?.address || '',
+      amount,
+      decimals: parseInt(raw.rawContract?.decimal || '0x12', 16) || 18,
+      // Counterparty
+      counterparty: {
+        address: counterpartyAddr,
+        labeled: '',  // Sprint 5 will populate
+        isContract: false,  // Sprint 5 will detect
+      },
+      // Audit
+      category: raw.category,  // external/internal/erc20/erc721/erc1155
+      _direction: raw._direction,  // 'from' or 'to' query
+    };
+  }
+
+  // Group transfers by txHash to detect swaps (multiple transfers in same tx)
+  function _groupByTx(events) {
+    const byTx = {};
+    for (const e of events) {
+      if (!byTx[e.txHash]) byTx[e.txHash] = [];
+      byTx[e.txHash].push(e);
+    }
+    return byTx;
+  }
+
+  // Basic classification (Sprint 5 will enrich with address book)
+  function _classify(eventsInTx) {
+    if (eventsInTx.length === 0) return;
+    const txType = (() => {
+      const ins = eventsInTx.filter(e => e.direction === 'in');
+      const outs = eventsInTx.filter(e => e.direction === 'out');
+      const selfs = eventsInTx.filter(e => e.direction === 'self');
+      if (selfs.length > 0 && ins.length === 0 && outs.length === 0) return 'self_transfer';
+      if (ins.length > 0 && outs.length > 0) return 'swap';
+      if (ins.length > 0) return 'receive';
+      if (outs.length > 0) return 'send';
+      return 'unknown';
+    })();
+    for (const e of eventsInTx) {
+      e.type = txType;
+    }
+  }
+
+  // Index a single wallet across all supported chains
+  // opts: { onProgress, signal (AbortSignal), fromBlock }
+  async function indexWallet(walletAddress, apiKey, opts = {}) {
+    if (!walletAddress || !apiKey) {
+      throw new Error('walletAddress and apiKey required');
+    }
+    const startTime = Date.now();
+    const summary = {
+      walletAddress,
+      chains: {},
+      totalEvents: 0,
+      totalCalls: 0,
+      errors: [],
+      startedAt: startTime,
+      durationMs: 0,
+    };
+
+    const chains = INDEXER_SUPPORTED_CHAINS;
+    let chainIdx = 0;
+
+    for (const chain of chains) {
+      if (opts.signal?.aborted) break;
+      chainIdx++;
+
+      opts.onProgress?.({
+        phase: 'fetching',
+        chain,
+        chainIdx,
+        chainsTotal: chains.length,
+        eventsCount: summary.totalEvents,
+      });
+
+      try {
+        const { transfers, skipped, calls, reason } = await alchemyAdapter.getTransfersForAddress(
+          walletAddress, chain, apiKey, { fromBlock: opts.fromBlock }
+        );
+        summary.totalCalls += (calls || 0);
+
+        if (skipped) {
+          summary.chains[chain] = { events: 0, skipped: true, reason };
+          continue;
+        }
+
+        // Convert and dedupe
+        const events = transfers.map(t => _normalizeTransfer(t, chain, walletAddress));
+        // Dedupe by id (incoming + outgoing queries can overlap for self-transfers)
+        const seen = new Set();
+        const uniqueEvents = [];
+        for (const e of events) {
+          if (!seen.has(e.id)) {
+            seen.add(e.id);
+            uniqueEvents.push(e);
+          }
+        }
+
+        // Classify (group by tx, detect swaps)
+        const byTx = _groupByTx(uniqueEvents);
+        for (const txHash in byTx) {
+          _classify(byTx[txHash]);
+        }
+
+        summary.chains[chain] = {
+          events: uniqueEvents.length,
+          calls: calls || 0,
+        };
+        summary.totalEvents += uniqueEvents.length;
+
+        // Persist incrementally so user sees progress
+        state.events = state.events || [];
+        // Remove existing events for this wallet+chain (will re-add)
+        state.events = state.events.filter(e =>
+          !(e.walletAddress === walletAddress.toLowerCase() && e.chain === chain)
+        );
+        state.events.push(...uniqueEvents);
+      } catch (err) {
+        errorLogger.error(`indexer.${chain}: ${err.message}`, { chain });
+        summary.errors.push({ chain, error: err.message });
+        summary.chains[chain] = { events: 0, error: err.message };
+      }
+    }
+
+    // Sort all events by timestamp (chronological)
+    state.events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    // Persist
+    saveState();
+
+    summary.durationMs = Date.now() - startTime;
+    opts.onProgress?.({
+      phase: 'done',
+      summary,
+    });
+
+    errorLogger.info(`Indexer complete: ${summary.totalEvents} events in ${(summary.durationMs/1000).toFixed(1)}s`,
+                     { calls: summary.totalCalls, errors: summary.errors.length });
+    return summary;
+  }
+
+  return {
+    indexWallet,
+    SUPPORTED_CHAINS: INDEXER_SUPPORTED_CHAINS,
+  };
+})();
+
+// Expose for debugging
+window.aurumIndexer = universalIndexer;
+window.aurumAlchemy = alchemyAdapter;
+
+
 
 
 async function loadState() {
@@ -3668,7 +4033,7 @@ async function loadState() {
   // IDB load happens via async/await, but the function blocks the rest of boot.
 
   // ── Schema versioning ──
-  const SCHEMA_VERSION = 4;
+  const SCHEMA_VERSION = 5;
   const MIGRATIONS = {
     1: (s) => { s.imports = s.imports || []; return s; },
     2: (s) => { s.cards = s.cards || []; return s; },
@@ -3683,6 +4048,12 @@ async function loadState() {
       }));
       s.cardTopups = s.cardTopups || [];
       s.cardSpends = s.cardSpends || [];
+      return s;
+    },
+    5: (s) => {
+      // Sprint 4: Universal Indexer
+      s.events = s.events || [];           // UniversalEvent[]
+      s.indexerMeta = s.indexerMeta || {}; // per-wallet: { lastIndexedAt, lastBlock }
       return s;
     },
   };
@@ -4283,7 +4654,7 @@ function render() {
   try {
     const w = activeWallet();
     if (!state.wallets.length || !w) { mc.innerHTML = renderSetup(); return; }
-    const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
+    const renders = { dashboard: renderDashboard, protocols: renderProtocols, cards: renderCards, history: renderHistory, strategy: renderStrategy, simulator: renderSimulator, wallets: renderWallets, fiscal: renderFiscal, settings: renderSettings };
     mc.innerHTML = `<div class="tab-content">${(renders[currentTab]||renderDashboard)(w)}</div>`;
     afterRender();
   } catch(e) {
@@ -6405,6 +6776,332 @@ function renderWallets() {
 // ══════════════════════════════════════════════════════════
 // FISCAL PT TAB
 // ══════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────
+// Sprint 4: Indexer UI controls
+// ─────────────────────────────────────────────────
+async function startIndexerForActiveWallet() {
+  const w = activeWallet();
+  if (!w) {
+    toast('Sem wallet activa', 'warn');
+    return;
+  }
+  if (!w.evm) {
+    toast('Wallet sem endereço EVM', 'warn');
+    return;
+  }
+  if (!w.alchemyKey) {
+    toast('Configura Alchemy API Key em Config primeiro', 'warn');
+    return;
+  }
+  if (window._indexerRunning) {
+    toast('Indexer já está a correr', 'info');
+    return;
+  }
+
+  window._indexerRunning = true;
+  window._indexerController = new AbortController();
+  render();
+
+  try {
+    const summary = await universalIndexer.indexWallet(w.evm, w.alchemyKey, {
+      signal: window._indexerController.signal,
+      onProgress: (p) => {
+        const phaseEl = document.getElementById('indexerPhase');
+        const countEl = document.getElementById('indexerCount');
+        const barEl = document.getElementById('indexerBar');
+        if (p.phase === 'fetching' && phaseEl) {
+          phaseEl.textContent = `A indexar ${p.chain.toUpperCase()}… (${p.chainIdx}/${p.chainsTotal})`;
+          if (countEl) countEl.textContent = `${p.eventsCount} eventos`;
+          if (barEl) barEl.style.width = `${(p.chainIdx / p.chainsTotal) * 100}%`;
+        } else if (p.phase === 'done' && phaseEl) {
+          phaseEl.textContent = `✓ Concluído (${p.summary.totalEvents} eventos)`;
+          if (barEl) barEl.style.width = '100%';
+        }
+      },
+    });
+
+    // Persist meta
+    state.indexerMeta = state.indexerMeta || {};
+    state.indexerMeta[w.id] = {
+      lastIndexedAt: Date.now(),
+      totalEvents: summary.totalEvents,
+      totalCalls: summary.totalCalls,
+      durationMs: summary.durationMs,
+      chains: summary.chains,
+    };
+    saveState();
+
+    const errors = summary.errors.length;
+    if (errors > 0) {
+      toast(`Indexer: ${summary.totalEvents} eventos · ${errors} chain(s) com erros`, 'warn');
+    } else {
+      toast(`✓ Indexer: ${summary.totalEvents} eventos em ${(summary.durationMs/1000).toFixed(1)}s`, 'success');
+    }
+  } catch (err) {
+    errorLogger.error('startIndexer: ' + err.message);
+    toast('Indexer falhou: ' + err.message, 'warn');
+  } finally {
+    window._indexerRunning = false;
+    window._indexerController = null;
+    render();
+  }
+}
+
+function cancelIndexer() {
+  if (window._indexerController) {
+    window._indexerController.abort();
+    toast('A cancelar indexer…', 'info');
+  }
+}
+
+function clearWalletEvents() {
+  const w = activeWallet();
+  if (!w) return;
+  const wAddr = (w.evm || '').toLowerCase();
+  const count = (state.events || []).filter(e => e.walletAddress === wAddr).length;
+  if (count === 0) return;
+  if (!confirm(`Apagar ${count} eventos indexados para esta wallet? Vai precisar de re-indexar depois.`)) return;
+  state.events = (state.events || []).filter(e => e.walletAddress !== wAddr);
+  if (state.indexerMeta && state.indexerMeta[w.id]) delete state.indexerMeta[w.id];
+  saveState();
+  toast(`✓ ${count} eventos apagados`, 'success');
+  render();
+}
+
+window.startIndexerForActiveWallet = startIndexerForActiveWallet;
+window.cancelIndexer = cancelIndexer;
+window.clearWalletEvents = clearWalletEvents;
+
+function renderHistory(w) {
+  state.events = state.events || [];
+  state.indexerMeta = state.indexerMeta || {};
+
+  const wAddr = (w.evm || '').toLowerCase();
+  const walletEvents = state.events.filter(e => e.walletAddress === wAddr);
+  const meta = state.indexerMeta[w.id] || {};
+
+  // Stats
+  const totalEvents = walletEvents.length;
+  const byChain = {};
+  const byType = {};
+  walletEvents.forEach(e => {
+    byChain[e.chain] = (byChain[e.chain] || 0) + 1;
+    byType[e.type] = (byType[e.type] || 0) + 1;
+  });
+
+  // Date range
+  const dates = walletEvents.map(e => e.timestamp).filter(t => t > 0).sort();
+  const oldest = dates.length ? new Date(dates[0] * 1000).toISOString().slice(0, 10) : '—';
+  const newest = dates.length ? new Date(dates[dates.length - 1] * 1000).toISOString().slice(0, 10) : '—';
+
+  // Filters from URL hash (simple state)
+  const filterChain = window._histFilterChain || 'all';
+  const filterType = window._histFilterType || 'all';
+  const filterAsset = window._histFilterAsset || '';
+
+  // Apply filters
+  let filtered = walletEvents;
+  if (filterChain !== 'all') filtered = filtered.filter(e => e.chain === filterChain);
+  if (filterType !== 'all') filtered = filtered.filter(e => e.type === filterType);
+  if (filterAsset) filtered = filtered.filter(e => (e.asset || '').toUpperCase().includes(filterAsset.toUpperCase()));
+
+  // Sort newest first
+  filtered = [...filtered].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+  // Paginate (50 per page)
+  const page = window._histPage || 0;
+  const pageSize = 50;
+  const pageEvents = filtered.slice(page * pageSize, (page + 1) * pageSize);
+  const totalPages = Math.ceil(filtered.length / pageSize);
+
+  const fmtAddr = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+  const fmtAmount = (e) => {
+    const a = +e.amount || 0;
+    if (a === 0) return '0';
+    if (a < 0.0001) return a.toExponential(2);
+    if (a < 1) return a.toFixed(6);
+    if (a < 1000) return a.toFixed(4);
+    return a.toFixed(2);
+  };
+  const dirIcon = (d) => d === 'in' ? '↓' : d === 'out' ? '↑' : d === 'self' ? '↻' : '?';
+  const dirColor = (d) => d === 'in' ? 'var(--green)' : d === 'out' ? 'var(--red)' : 'var(--text-muted)';
+  const typeBadge = (t) => {
+    const colors = { receive: '#16a34a', send: '#dc2626', swap: '#B8956A', self_transfer: '#666', unknown: '#888' };
+    const labels = { receive: 'Recebido', send: 'Enviado', swap: 'Swap', self_transfer: 'Self', unknown: '?' };
+    return `<span style="background:${colors[t]||'#888'}22;color:${colors[t]||'#888'};padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:600;letter-spacing:0.05em">${labels[t]||t}</span>`;
+  };
+  const chainColor = (c) => ({ eth: '#627EEA', base: '#0052FF', arbitrum: '#28A0F0', optimism: '#FF0420' }[c] || '#888');
+
+  // Check if indexing is running
+  const isIndexing = window._indexerRunning === true;
+
+  return `
+    <div class="section-row" style="margin-bottom:1.5rem">
+      <div class="section-label">Histórico Universal — toda a actividade on-chain</div>
+    </div>
+
+    <!-- Stats grid -->
+    <div class="stats-grid" style="margin-bottom:1.5rem">
+      <div class="stat">
+        <div class="stat-label">Eventos Totais</div>
+        <div class="stat-value sv-gold">${totalEvents}</div>
+        <div class="stat-sub">${oldest === newest ? oldest : `${oldest} → ${newest}`}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Chains Indexados</div>
+        <div class="stat-value sv-blue">${Object.keys(byChain).length}</div>
+        <div class="stat-sub">${Object.keys(byChain).join(' · ') || '—'}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Swaps Detectados</div>
+        <div class="stat-value sv-amber">${byType.swap || 0}</div>
+        <div class="stat-sub">classificação fiscal: Sprint 5</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Última Indexação</div>
+        <div class="stat-value" style="font-size:1.05rem;color:var(--text)">${meta.lastIndexedAt ? new Date(meta.lastIndexedAt).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : 'Nunca'}</div>
+        <div class="stat-sub">${meta.totalCalls ? `${meta.totalCalls} chamadas RPC` : ''}</div>
+      </div>
+    </div>
+
+    <!-- Indexer control -->
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head">
+        <span class="panel-title">⚙️ Universal Indexer</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Alchemy · ${universalIndexer.SUPPORTED_CHAINS.length} chains</span>
+      </div>
+      <div class="panel-body">
+        ${!w.alchemyKey ? `
+          <div class="alert alert-warn" style="margin-bottom:1rem">
+            <span>⚠</span>
+            <div>Configura a tua Alchemy API Key em <strong>Config → Conexões</strong> para activar o indexer.</div>
+          </div>
+        ` : ''}
+        <div id="indexerProgress" style="margin-bottom:1rem;display:${isIndexing ? 'block' : 'none'}">
+          <div style="background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:1rem">
+            <div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:0.5rem">
+              <span id="indexerPhase" style="color:var(--gold)">A iniciar…</span>
+              <span id="indexerCount" style="font-family:var(--mono);color:var(--text-muted)">0 eventos</span>
+            </div>
+            <div style="background:var(--bg);height:6px;border-radius:3px;overflow:hidden">
+              <div id="indexerBar" style="background:linear-gradient(90deg,var(--gold),#F0D9A8);height:100%;width:0%;transition:width 0.4s"></div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+          <button class="btn btn-gold btn-sm" onclick="startIndexerForActiveWallet()" ${!w.alchemyKey || isIndexing ? 'disabled' : ''}>
+            ${isIndexing ? '⏳ A indexar…' : (totalEvents > 0 ? '↻ Re-indexar' : '⚡ Indexar Agora')}
+          </button>
+          ${isIndexing ? `<button class="btn btn-outline btn-sm" onclick="cancelIndexer()">✕ Cancelar</button>` : ''}
+          ${totalEvents > 0 ? `<button class="btn btn-outline btn-sm" onclick="clearWalletEvents()">🗑 Limpar Eventos</button>` : ''}
+        </div>
+        <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
+          <span>ℹ</span>
+          <div>
+            O indexer descarrega <strong>todo o histórico on-chain</strong> da tua wallet desde o primeiro bloco — necessário para FIFO correcto e regime transitório &lt;2023 (Art. 220 OE/2023).<br>
+            Chains: ${universalIndexer.SUPPORTED_CHAINS.join(', ')}. Mais chains nas próximas updates.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${totalEvents === 0 ? `
+      <div class="panel">
+        <div class="panel-body">
+          <div class="empty" style="padding:3rem 1rem">
+            <span class="empty-icon">🌐</span>
+            <p style="font-size:1rem;color:var(--text);margin-top:0.5rem">Sem eventos indexados ainda</p>
+            <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.5rem;max-width:480px;margin-left:auto;margin-right:auto">
+              Clica em <strong>"Indexar Agora"</strong> acima para descarregar toda a actividade on-chain desta wallet. Demora ~30s-2min na primeira vez (depois é incremental).
+            </p>
+          </div>
+        </div>
+      </div>
+    ` : `
+      <!-- Filters -->
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-body" style="display:flex;flex-wrap:wrap;gap:0.6rem;align-items:flex-end">
+          <div>
+            <label style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase">Chain</label><br>
+            <select class="form-select" style="min-width:130px" onchange="window._histFilterChain=this.value;window._histPage=0;render()">
+              <option value="all">Todas (${totalEvents})</option>
+              ${Object.entries(byChain).sort((a,b)=>b[1]-a[1]).map(([c,n]) => `<option value="${c}" ${c===filterChain?'selected':''}>${c.toUpperCase()} (${n})</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase">Tipo</label><br>
+            <select class="form-select" style="min-width:130px" onchange="window._histFilterType=this.value;window._histPage=0;render()">
+              <option value="all">Todos</option>
+              ${Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,n]) => `<option value="${t}" ${t===filterType?'selected':''}>${t} (${n})</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase">Asset</label><br>
+            <input class="form-input" style="min-width:120px" placeholder="USDC, ETH…" value="${filterAsset}" oninput="window._histFilterAsset=this.value;window._histPage=0;render()">
+          </div>
+          ${(filterChain !== 'all' || filterType !== 'all' || filterAsset) ? `
+            <button class="btn btn-outline btn-sm" onclick="window._histFilterChain='all';window._histFilterType='all';window._histFilterAsset='';window._histPage=0;render()">✕ Limpar</button>
+          ` : ''}
+          <div style="margin-left:auto;font-size:0.78rem;color:var(--text-muted)">
+            ${filtered.length} ${filtered.length === 1 ? 'evento' : 'eventos'}${filtered.length !== totalEvents ? ` (de ${totalEvents})` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Events table -->
+      <div class="panel">
+        <div class="panel-body no-pad">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Chain</th>
+                  <th>Tipo</th>
+                  <th>Asset</th>
+                  <th style="text-align:right">Quantidade</th>
+                  <th>Direcção</th>
+                  <th>Counterparty</th>
+                  <th>Tx</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${pageEvents.map(e => `
+                  <tr>
+                    <td style="font-family:var(--mono);font-size:0.75rem">${e.date || '—'}</td>
+                    <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${chainColor(e.chain)};margin-right:0.4rem"></span>${e.chain.toUpperCase()}</td>
+                    <td>${typeBadge(e.type)}</td>
+                    <td style="font-family:var(--mono);font-weight:600;font-size:0.78rem">${e.asset || '?'}</td>
+                    <td style="text-align:right;font-family:var(--num);font-size:0.78rem">${fmtAmount(e)}</td>
+                    <td style="font-size:0.78rem;color:${dirColor(e.direction)};font-weight:600">${dirIcon(e.direction)} ${e.direction}</td>
+                    <td style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)" title="${e.counterparty?.address || ''}">${fmtAddr(e.counterparty?.address)}</td>
+                    <td><a href="${getTxUrl(e.chain, e.txHash)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:0.7rem;color:var(--gold)">${e.txHash.slice(0, 6)}…</a></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ${totalPages > 1 ? `
+            <div style="display:flex;justify-content:center;align-items:center;gap:0.5rem;padding:1rem">
+              <button class="btn btn-outline btn-sm" ${page === 0 ? 'disabled' : ''} onclick="window._histPage=Math.max(0,(window._histPage||0)-1);render()">←</button>
+              <span style="font-size:0.85rem;color:var(--text-muted);font-family:var(--mono)">${page+1} / ${totalPages}</span>
+              <button class="btn btn-outline btn-sm" ${page >= totalPages-1 ? 'disabled' : ''} onclick="window._histPage=Math.min(${totalPages-1},(window._histPage||0)+1);render()">→</button>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `}
+  `;
+}
+
+// Block explorer URL builder
+function getTxUrl(chain, txHash) {
+  const cfg = CHAINS[chain];
+  if (!cfg || !txHash) return '#';
+  return `${cfg.explorer}/tx/${txHash}`;
+}
+
 function renderFiscal(w) {
   // ════════════════════════════════════════════════════════
   // Tax Report — Portugal IRS (Anexo G / G1 / E)
