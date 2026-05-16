@@ -1,5 +1,5 @@
 # Aurum
-
+[![Tests](https://github.com/danyundercrypto/aurum/actions/workflows/test.yml/badge.svg)](https://github.com/danyundercrypto/aurum/actions/workflows/test.yml)
 DeFi Ghost Tracker — AAVE V3 + Morpho Blue monitor with PT IRS tax tracking.
 
 **Live app:** https://danyundercrypto.github.io/aurum/
