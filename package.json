@@ -1,0 +1,16 @@
+{
+  "name": "aurum-tests",
+  "version": "1.0.0",
+  "description": "Test infrastructure for Aurum's tax/classifier domain logic",
+  "private": true,
+  "scripts": {
+    "sync": "python3 scripts/sync-from-html.py",
+    "test": "node tests/run-all.js",
+    "check": "npm run sync && npm test",
+    "ci": "npm run check"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

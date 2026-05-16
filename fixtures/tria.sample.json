@@ -1,0 +1,606 @@
+{
+  "name": "Tria account statement (anonymized)",
+  "filename": "account-statement-December-2025-to-May-2026.csv",
+  "headers": [
+    "Time",
+    "Description",
+    "Spent",
+    "Cashback",
+    "Transaction (USD)",
+    "Type"
+  ],
+  "rows": [
+    {
+      "Time": "8:07 PM | 05/07/2026",
+      "Description": "ANTHROPIC IRELAND        ",
+      "Spent": "EUR 15.99",
+      "Cashback": "$0.28",
+      "Transaction (USD)": "$19.06",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:05 PM | 05/07/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$20.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "5:38 PM | 04/27/2026",
+      "Description": "ANTHROPIC IRELAND        ",
+      "Spent": "EUR 20.91",
+      "Cashback": "$0.37",
+      "Transaction (USD)": "$24.77",
+      "Type": "Debit"
+    },
+    {
+      "Time": "5:36 PM | 04/27/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$25.06",
+      "Type": "Credit"
+    },
+    {
+      "Time": "4:19 PM | 04/27/2026",
+      "Description": "ANTHROPIC IRELAND        ",
+      "Spent": "EUR 20.91",
+      "Cashback": "$0.37",
+      "Transaction (USD)": "$24.77",
+      "Type": "Debit"
+    },
+    {
+      "Time": "4:18 PM | 04/27/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$25.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "11:16 AM | 04/27/2026",
+      "Description": "ANTHROPIC IRELAND        ",
+      "Spent": "EUR 8.61",
+      "Cashback": "$0.15",
+      "Transaction (USD)": "$10.20",
+      "Type": "Debit"
+    },
+    {
+      "Time": "11:12 AM | 04/27/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$10.33",
+      "Type": "Credit"
+    },
+    {
+      "Time": "3:14 PM | 04/25/2026",
+      "Description": "X CORP. PAID FEATURES    ",
+      "Spent": "EUR 7.00",
+      "Cashback": "$0.12",
+      "Transaction (USD)": "$8.29",
+      "Type": "Debit"
+    },
+    {
+      "Time": "12:32 PM | 04/23/2026",
+      "Description": "ANTHROPIC IRELAND        ",
+      "Spent": "EUR 6.15",
+      "Cashback": "$0.10",
+      "Transaction (USD)": "$7.30",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:28 PM | 04/15/2026",
+      "Description": "CLAUDE.AI SUBSCRIPTION   ",
+      "Spent": "EUR 22.14",
+      "Cashback": "$0.39",
+      "Transaction (USD)": "$26.41",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:24 PM | 04/15/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$39.98",
+      "Type": "Credit"
+    },
+    {
+      "Time": "6:16 AM | 03/28/2026",
+      "Description": "X CORP. PAID FEATURES    ",
+      "Spent": "EUR 7.00",
+      "Cashback": "$0.12",
+      "Transaction (USD)": "$8.16",
+      "Type": "Debit"
+    },
+    {
+      "Time": "7:04 AM | 03/26/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$10.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "8:40 AM | 03/23/2026",
+      "Description": "INTERMARCHE SEIA         ",
+      "Spent": "USD 10.95",
+      "Cashback": "$0.16",
+      "Transaction (USD)": "$10.95",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:32 AM | 03/23/2026",
+      "Description": "LIDL AGRADECE            ",
+      "Spent": "EUR 6.02",
+      "Cashback": "$0.10",
+      "Transaction (USD)": "$7.05",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:34 PM | 03/22/2026",
+      "Description": "FARMACIA MELO SEIA L     ",
+      "Spent": "EUR 8.95",
+      "Cashback": "$0.15",
+      "Transaction (USD)": "$10.48",
+      "Type": "Debit"
+    },
+    {
+      "Time": "3:15 PM | 03/22/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 67.91",
+      "Cashback": "$1.19",
+      "Transaction (USD)": "$79.55",
+      "Type": "Debit"
+    },
+    {
+      "Time": "12:13 PM | 03/22/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$100.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "8:28 PM | 03/21/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 23.21",
+      "Cashback": "$0.34",
+      "Transaction (USD)": "$23.21",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:09 PM | 03/21/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 17.99",
+      "Cashback": "$0.31",
+      "Transaction (USD)": "$21.07",
+      "Type": "Debit"
+    },
+    {
+      "Time": "7:21 PM | 03/21/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$50.17",
+      "Type": "Credit"
+    },
+    {
+      "Time": "6:42 PM | 03/19/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 5.62",
+      "Cashback": "$0.08",
+      "Transaction (USD)": "$5.62",
+      "Type": "Debit"
+    },
+    {
+      "Time": "11:05 AM | 03/16/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 5.91",
+      "Cashback": "$0.08",
+      "Transaction (USD)": "$5.91",
+      "Type": "Debit"
+    },
+    {
+      "Time": "10:54 AM | 03/16/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 20.99",
+      "Cashback": "$0.36",
+      "Transaction (USD)": "$24.45",
+      "Type": "Debit"
+    },
+    {
+      "Time": "9:42 AM | 03/16/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$10.10",
+      "Type": "Credit"
+    },
+    {
+      "Time": "9:42 AM | 03/16/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$19.11",
+      "Type": "Credit"
+    },
+    {
+      "Time": "6:18 PM | 03/14/2026",
+      "Description": "CONTINENTE BOM DIA       ",
+      "Spent": "EUR 17.37",
+      "Cashback": "$0.30",
+      "Transaction (USD)": "$20.23",
+      "Type": "Debit"
+    },
+    {
+      "Time": "2:12 PM | 03/13/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 20.99",
+      "Cashback": "$0.36",
+      "Transaction (USD)": "$24.54",
+      "Type": "Debit"
+    },
+    {
+      "Time": "2:02 PM | 03/13/2026",
+      "Description": "PINGO DOCE SEIA          ",
+      "Spent": "USD 127.93",
+      "Cashback": "$1.91",
+      "Transaction (USD)": "$127.93",
+      "Type": "Debit"
+    },
+    {
+      "Time": "11:13 AM | 03/13/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$50.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "10:01 AM | 03/13/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$131.86",
+      "Type": "Credit"
+    },
+    {
+      "Time": "1:16 AM | 03/02/2026",
+      "Description": "X CORP. PAID FEATURES    ",
+      "Spent": "EUR 7.00",
+      "Cashback": "$0.12",
+      "Transaction (USD)": "$8.36",
+      "Type": "Debit"
+    },
+    {
+      "Time": "4:55 PM | 02/27/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$5.96",
+      "Type": "Credit"
+    },
+    {
+      "Time": "1:17 PM | 02/23/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 8.99",
+      "Cashback": "$0.16",
+      "Transaction (USD)": "$10.73",
+      "Type": "Debit"
+    },
+    {
+      "Time": "5:28 PM | 02/16/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 13.49",
+      "Cashback": "$0.24",
+      "Transaction (USD)": "$16.20",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:28 PM | 02/14/2026",
+      "Description": "ALVES BANDEIRA SEIA      ",
+      "Spent": "EUR 7.99",
+      "Cashback": "$0.14",
+      "Transaction (USD)": "$9.60",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:43 PM | 02/13/2026",
+      "Description": "CONTINENTE BOM DIA       ",
+      "Spent": "EUR 1.99",
+      "Cashback": "$0.03",
+      "Transaction (USD)": "$2.39",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:11 PM | 02/13/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 12.00",
+      "Cashback": "$0.21",
+      "Transaction (USD)": "$14.41",
+      "Type": "Debit"
+    },
+    {
+      "Time": "5:22 PM | 02/13/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$49.44",
+      "Type": "Credit"
+    },
+    {
+      "Time": "4:59 PM | 02/13/2026",
+      "Description": "INTERMARCHE SEIA         ",
+      "Spent": "USD 43.27",
+      "Cashback": "$0.64",
+      "Transaction (USD)": "$43.27",
+      "Type": "Debit"
+    },
+    {
+      "Time": "4:09 PM | 02/13/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$50.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "7:55 PM | 02/12/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 12.06",
+      "Cashback": "$0.18",
+      "Transaction (USD)": "$12.06",
+      "Type": "Debit"
+    },
+    {
+      "Time": "1:13 PM | 02/11/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 12.00",
+      "Cashback": "$0.21",
+      "Transaction (USD)": "$14.46",
+      "Type": "Debit"
+    },
+    {
+      "Time": "3:43 PM | 02/10/2026",
+      "Description": "CONTINENTE BOM DIA       ",
+      "Spent": "EUR 22.06",
+      "Cashback": "$0.39",
+      "Transaction (USD)": "$26.57",
+      "Type": "Debit"
+    },
+    {
+      "Time": "6:33 PM | 02/09/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 27.84",
+      "Cashback": "$0.41",
+      "Transaction (USD)": "$27.84",
+      "Type": "Debit"
+    },
+    {
+      "Time": "3:23 PM | 02/09/2026",
+      "Description": "PLENERGY GUARDA I        ",
+      "Spent": "EUR 25.00",
+      "Cashback": "$0.44",
+      "Transaction (USD)": "$29.87",
+      "Type": "Debit"
+    },
+    {
+      "Time": "9:58 AM | 02/09/2026",
+      "Description": "INTERMARCHE ALT CHAO     ",
+      "Spent": "EUR 5.86",
+      "Cashback": "$0.10",
+      "Transaction (USD)": "$7.00",
+      "Type": "Debit"
+    },
+    {
+      "Time": "7:52 AM | 02/09/2026",
+      "Description": "PLENERGY GUARDA I        ",
+      "Spent": "EUR 35.00",
+      "Cashback": "$0.62",
+      "Transaction (USD)": "$41.80",
+      "Type": "Debit"
+    },
+    {
+      "Time": "1:35 AM | 02/09/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$130.01",
+      "Type": "Credit"
+    },
+    {
+      "Time": "12:45 PM | 02/08/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 32.81",
+      "Cashback": "$0.49",
+      "Transaction (USD)": "$32.81",
+      "Type": "Debit"
+    },
+    {
+      "Time": "12:29 PM | 02/08/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 45.09",
+      "Cashback": "$0.80",
+      "Transaction (USD)": "$53.86",
+      "Type": "Debit"
+    },
+    {
+      "Time": "11:22 AM | 02/08/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$99.71",
+      "Type": "Credit"
+    },
+    {
+      "Time": "10:49 AM | 02/07/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 8.99",
+      "Cashback": "$0.16",
+      "Transaction (USD)": "$10.74",
+      "Type": "Debit"
+    },
+    {
+      "Time": "4:40 PM | 02/05/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 20.99",
+      "Cashback": "$0.37",
+      "Transaction (USD)": "$25.10",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:39 PM | 01/30/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 25.13",
+      "Cashback": "$0.37",
+      "Transaction (USD)": "$25.13",
+      "Type": "Debit"
+    },
+    {
+      "Time": "3:04 PM | 01/29/2026",
+      "Description": "PINGO DOCE SEIA          ",
+      "Spent": "USD 85.76",
+      "Cashback": "$1.28",
+      "Transaction (USD)": "$85.76",
+      "Type": "Debit"
+    },
+    {
+      "Time": "1:43 PM | 01/29/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$150.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "12:37 PM | 01/27/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 25.77",
+      "Cashback": "$0.38",
+      "Transaction (USD)": "$25.77",
+      "Type": "Debit"
+    },
+    {
+      "Time": "2:15 PM | 01/25/2026",
+      "Description": "X CORP. PAID FEATURES    ",
+      "Spent": "EUR 7.00",
+      "Cashback": "$0.12",
+      "Transaction (USD)": "$8.37",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:40 PM | 01/23/2026",
+      "Description": "ALVES BANDEIRA SEIA      ",
+      "Spent": "EUR 12.00",
+      "Cashback": "$0.21",
+      "Transaction (USD)": "$14.25",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:36 PM | 01/23/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 36.89",
+      "Cashback": "$0.55",
+      "Transaction (USD)": "$36.89",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:15 PM | 01/23/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$50.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "12:50 PM | 01/21/2026",
+      "Description": "CONTINENTE BOM DIA       ",
+      "Spent": "EUR 28.23",
+      "Cashback": "$0.50",
+      "Transaction (USD)": "$33.56",
+      "Type": "Debit"
+    },
+    {
+      "Time": "12:05 PM | 01/21/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$30.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "8:34 AM | 01/21/2026",
+      "Description": "INTERMARCHE SEIA         ",
+      "Spent": "EUR 16.50",
+      "Cashback": "$0.29",
+      "Transaction (USD)": "$19.61",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:33 AM | 01/21/2026",
+      "Description": "INTERMARCHE SEIA         ",
+      "Spent": "EUR 2.39",
+      "Cashback": "$0.04",
+      "Transaction (USD)": "$2.84",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:41 PM | 01/20/2026",
+      "Description": "REPSOL E0966             ",
+      "Spent": "EUR 8.99",
+      "Cashback": "$0.15",
+      "Transaction (USD)": "$10.57",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:37 PM | 01/20/2026",
+      "Description": "ALDI SEIA                ",
+      "Spent": "USD 7.44",
+      "Cashback": "$0.11",
+      "Transaction (USD)": "$7.44",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:30 PM | 01/20/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$45.93",
+      "Type": "Credit"
+    },
+    {
+      "Time": "8:28 PM | 01/20/2026",
+      "Description": "CONTINENTE BOM DIA       ",
+      "Spent": "EUR 6.97",
+      "Cashback": "$0.12",
+      "Transaction (USD)": "$8.20",
+      "Type": "Debit"
+    },
+    {
+      "Time": "8:27 PM | 01/20/2026",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$5.00",
+      "Type": "Credit"
+    },
+    {
+      "Time": "11:17 AM | 12/27/2025",
+      "Description": "Top up",
+      "Spent": "",
+      "Cashback": "",
+      "Transaction (USD)": "$10.00",
+      "Type": "Credit"
+    }
+  ],
+  "expected": {
+    "detect": "tria",
+    "parsed": 73,
+    "skipped": 0,
+    "expense_count": 50,
+    "topup_count": 23,
+    "inline_cashback_count": 50
+  }
+}
