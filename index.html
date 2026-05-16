@@ -3123,21 +3123,293 @@ let interestTimer = null;
 // ══════════════════════════════════════════════════════════
 // STORAGE
 // ══════════════════════════════════════════════════════════
-async function loadState() {
-  // C2: Schema versioning
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
-// ║  SECTION 2 — STATE & PERSISTENCE                                        ║
-// ║  Schema versioning, migrations, localStorage I/O                        ║
+// ║  SECTION 2 — STATE & PERSISTENCE (Sprint 2: IndexedDB + Backups)        ║
+// ║                                                                          ║
+// ║  Architecture (Opção A — hybrid key-value)                              ║
+// ║    IndexedDB                                                             ║
+// ║      DB:    aurum                                                        ║
+// ║      Store: state_blob (key-value)                                       ║
+// ║        ↳ 'main'       → current state                                    ║
+// ║        ↳ 'backup_0..4'→ rolling auto-backups                             ║
+// ║        ↳ 'meta'       → schema version, last save info                   ║
+// ║                                                                          ║
+// ║  Fallback chain (read): IDB → LS v2 → window.storage → LS v1 → fresh    ║
+// ║  Save strategy (write): SYNC LS mirror + ASYNC IDB + rotating backups   ║
+// ║  App keeps working even if either layer fails.                           ║
+// ║                                                                          ║
+// ║  Future Sprint 2.5 (Opção B — normalized):                              ║
+// ║    Split into 8 indexed stores for O(log n) queries.                    ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
+
+const IDB_NAME = 'aurum';
+const IDB_VERSION = 1;
+const IDB_STORE = 'state_blob';
+const IDB_KEY_MAIN = 'main';
+const IDB_KEY_META = 'meta';
+const BACKUP_KEEP = 5;
+const LS_KEY = 'ghost2_state';
+const LS_KEY_V1 = 'ghost_state';
+const BACKUP_MIN_INTERVAL_MS = 60 * 1000;
+
+const idb = (() => {
+  let _dbPromise = null;
+  let _supported = null;
+
+  function open() {
+    if (_dbPromise) return _dbPromise;
+    _dbPromise = new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') {
+        _supported = false;
+        return reject(new Error('IndexedDB not supported'));
+      }
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+        // SPRINT 2.5 B-migration: add normalized stores with indexes here
+      };
+      req.onsuccess = (e) => { _supported = true; resolve(e.target.result); };
+      req.onerror = (e) => { _supported = false; reject(e.target.error || new Error('IDB open failed')); };
+      req.onblocked = () => { _supported = false; reject(new Error('IDB blocked')); };
+    });
+    return _dbPromise;
+  }
+
+  function tx(mode = 'readonly') {
+    return open().then(db => db.transaction(IDB_STORE, mode).objectStore(IDB_STORE));
+  }
+
+  return {
+    async get(key) {
+      const store = await tx('readonly');
+      return new Promise((res, rej) => {
+        const r = store.get(key);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+    },
+    async set(key, value) {
+      const store = await tx('readwrite');
+      return new Promise((res, rej) => {
+        const r = store.put(value, key);
+        r.onsuccess = () => res();
+        r.onerror = () => rej(r.error);
+      });
+    },
+    async delete(key) {
+      const store = await tx('readwrite');
+      return new Promise((res, rej) => {
+        const r = store.delete(key);
+        r.onsuccess = () => res();
+        r.onerror = () => rej(r.error);
+      });
+    },
+    async keys() {
+      const store = await tx('readonly');
+      return new Promise((res, rej) => {
+        const r = store.getAllKeys();
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+    },
+    isSupported() { return _supported; },
+  };
+})();
+
+const storageManager = (() => {
+  let _saveSeq = 0;
+  let _lastBackupAt = 0;
+
+  async function rotateBackups() {
+    try {
+      const main = await idb.get(IDB_KEY_MAIN);
+      if (!main) return;
+      for (let i = BACKUP_KEEP - 1; i > 0; i--) {
+        const older = await idb.get(`backup_${i-1}`);
+        if (older) await idb.set(`backup_${i}`, older);
+      }
+      await idb.set('backup_0', { ...main, _backupAt: Date.now() });
+    } catch (err) {
+      console.warn('[storage] backup rotation failed:', err.message);
+    }
+  }
+
+  return {
+    async save(stateObj, opts = {}) {
+      const seq = ++_saveSeq;
+      const payload = {
+        state: stateObj,
+        savedAt: Date.now(),
+        schemaVersion: stateObj._schemaVersion || 1,
+      };
+      try {
+        const shouldBackup = _lastBackupAt > 0 &&
+                             (Date.now() - _lastBackupAt) > BACKUP_MIN_INTERVAL_MS &&
+                             !opts.skipBackup;
+        if (shouldBackup) {
+          await rotateBackups();
+          _lastBackupAt = Date.now();
+        } else if (_lastBackupAt === 0) {
+          _lastBackupAt = Date.now();
+        }
+        await idb.set(IDB_KEY_MAIN, payload);
+        await idb.set(IDB_KEY_META, {
+          schemaVersion: payload.schemaVersion,
+          lastSaveAt: payload.savedAt,
+          lastSaveSeq: seq,
+        });
+        return { ok: true, source: 'idb', seq };
+      } catch (err) {
+        console.warn('[storage] IDB save failed:', err.message);
+        return { ok: false, source: 'idb', error: err.message, seq };
+      }
+    },
+    saveLocalStorageMirror(stateObj) {
+      try {
+        const s = JSON.stringify(stateObj);
+        if (s.length > 4 * 1024 * 1024) {
+          console.warn('[storage] state > 4MB, LS mirror skipped (IDB only)');
+          return { ok: false, reason: 'too_large' };
+        }
+        localStorage.setItem(LS_KEY, s);
+        try { window.storage?.set?.(LS_KEY, s); } catch(e) {}
+        return { ok: true };
+      } catch (err) {
+        console.warn('[storage] LS mirror failed:', err.message);
+        return { ok: false, reason: err.name };
+      }
+    },
+    async load() {
+      try {
+        const payload = await idb.get(IDB_KEY_MAIN);
+        if (payload?.state) {
+          console.log(`[storage] loaded from IDB`);
+          return { state: payload.state, source: 'idb', savedAt: payload.savedAt };
+        }
+      } catch (err) {
+        console.warn('[storage] IDB load failed:', err.message);
+      }
+      const lsRaw = localStorage.getItem(LS_KEY);
+      if (lsRaw) {
+        try {
+          const parsed = JSON.parse(lsRaw);
+          console.log('[storage] loaded from localStorage');
+          return { state: parsed, source: 'ls_v2', savedAt: 0 };
+        } catch (err) {
+          console.warn('[storage] LS parse failed:', err.message);
+        }
+      }
+      try {
+        const r = await window.storage?.get?.(LS_KEY);
+        if (r?.value) {
+          const parsed = JSON.parse(r.value);
+          return { state: parsed, source: 'window_storage', savedAt: 0 };
+        }
+      } catch (e) {}
+      const v1raw = localStorage.getItem(LS_KEY_V1);
+      if (v1raw) {
+        try {
+          const v1 = JSON.parse(v1raw);
+          return { state: v1, source: 'ls_v1', savedAt: 0, needsV1Migration: true };
+        } catch (err) {
+          console.warn('[storage] v1 parse failed:', err.message);
+        }
+      }
+      return { state: null, source: 'fresh', savedAt: 0 };
+    },
+    async listBackups() {
+      const out = [];
+      for (let i = 0; i < BACKUP_KEEP; i++) {
+        try {
+          const b = await idb.get(`backup_${i}`);
+          if (b) {
+            out.push({
+              index: i,
+              savedAt: b.savedAt || b._backupAt || 0,
+              schemaVersion: b.schemaVersion,
+              size: JSON.stringify(b.state || {}).length,
+            });
+          }
+        } catch (e) {}
+      }
+      return out;
+    },
+    async restoreBackup(index) {
+      const b = await idb.get(`backup_${index}`);
+      if (!b?.state) throw new Error(`Backup ${index} not found`);
+      await rotateBackups();
+      await idb.set(IDB_KEY_MAIN, b);
+      return b;
+    },
+    exportToBlob(stateObj) {
+      const wrapper = {
+        format: 'aurum-backup-v1',
+        exportedAt: new Date().toISOString(),
+        schemaVersion: stateObj._schemaVersion || 1,
+        state: stateObj,
+      };
+      const json = JSON.stringify(wrapper, null, 2);
+      let checksum = 0;
+      for (let i = 0; i < json.length; i++) {
+        checksum = (checksum * 31 + json.charCodeAt(i)) >>> 0;
+      }
+      wrapper.checksum = checksum.toString(16);
+      return new Blob([JSON.stringify(wrapper, null, 2)], { type: 'application/json' });
+    },
+    async importFromText(text) {
+      const parsed = JSON.parse(text);
+      if (parsed.format !== 'aurum-backup-v1') {
+        throw new Error('Formato de backup não reconhecido');
+      }
+      if (!parsed.state) throw new Error('Backup sem state');
+      return parsed.state;
+    },
+    async requestPersistence() {
+      try {
+        if (navigator.storage?.persist) {
+          const granted = await navigator.storage.persist();
+          console.log(`[storage] persistence ${granted ? 'granted ✓' : 'denied'}`);
+          return granted;
+        }
+      } catch (e) {}
+      return false;
+    },
+    async estimateUsage() {
+      try {
+        if (navigator.storage?.estimate) {
+          const est = await navigator.storage.estimate();
+          return {
+            usedBytes: est.usage,
+            quotaBytes: est.quota,
+            usedPct: est.usage / est.quota * 100,
+          };
+        }
+      } catch (e) {}
+      return null;
+    },
+  };
+})();
+
+window.aurumStorage = storageManager;
+window.aurumIDB = idb;
+
+
+async function loadState() {
+  // Sprint 2: tiered load with IDB → LS v2 → LS v1 → fresh fallback chain.
+  // This is sync-wrapped because boot() expects to run after state is loaded.
+  // IDB load happens via async/await, but the function blocks the rest of boot.
+
+  // ── Schema versioning ──
   const SCHEMA_VERSION = 4;
-  // Migrations applied in order. Each gets the state and returns migrated state.
   const MIGRATIONS = {
     1: (s) => { s.imports = s.imports || []; return s; },
     2: (s) => { s.cards = s.cards || []; return s; },
     3: (s) => { s.morphoUserMarkets = s.morphoUserMarkets || {}; return s; },
     4: (s) => {
-      // Add tax-treatment fields to existing cards (default: 'unknown' → forces setup)
       s.cards = (s.cards || []).map(c => ({
         ...c,
         defaultFundingSource: c.defaultFundingSource || 'unknown',
@@ -3145,82 +3417,117 @@ async function loadState() {
         primaryAsset: c.primaryAsset || (c.network === 'gnosis' ? 'EURe' : 'USDC'),
         setupCompleted: c.setupCompleted !== undefined ? c.setupCompleted : false,
       }));
-      // Initialize new arrays for tax tracking
       s.cardTopups = s.cardTopups || [];
       s.cardSpends = s.cardSpends || [];
       return s;
     },
   };
-  // Will run after state is loaded below
 
-  try {
-    // Try v2 key first
-    let raw = localStorage.getItem('ghost2_state');
-    // Try window.storage (Claude artifact env)
-    if (!raw) { try { const r = await window.storage.get('ghost2_state'); if (r?.value) raw = r.value; } catch(e){} }
-    // Migrate from v1 if v2 not found
-    if (!raw) {
-      const v1raw = localStorage.getItem('ghost_state');
-      if (v1raw) {
-        try {
-          const v1 = JSON.parse(v1raw);
-          // Migrate v1 wallets to v2 format
-          if (v1.wallets?.length) {
-            state.wallets = v1.wallets.map(w=>({...w, sol:w.sol||'', apiKey:w.apiKey||w.etherscanKey||'', tgToken:'', tgChat:''}));
-            state.activeWId = v1.activeWalletId || v1.activeWId || v1.wallets[0]?.id || null;
-          }
-          // Migrate collateral (different field names in v1)
-          if (v1.colaterais?.length) {
-            state.collateral = v1.colaterais.map(c=>({...c, acqDate:c.acquired_date||c.acqDate||c.date, depDate:c.date||c.depDate, eur:c.amount_eur||c.eur, qty:c.amount_crypto||c.qty, walletId:c.walletId||state.wallets[0]?.id}));
-          }
-          console.log('Migrated from v1:', state.wallets.length, 'wallets');
-          saveState();
-        } catch(e) { console.warn('v1 migration failed:', e); }
-      }
-    }
-    if (raw) { const p = JSON.parse(raw); Object.assign(state, p);
-  // Run pending migrations
-  const fromVer = state._schemaVersion || 1;
-  if (fromVer < SCHEMA_VERSION) {
-    console.log(`[Migration] State at v${fromVer}, migrating to v${SCHEMA_VERSION}`);
+  function applyMigrations(s) {
+    const fromVer = s._schemaVersion || 1;
+    if (fromVer >= SCHEMA_VERSION) return s;
+    console.log(`[Migration] state at v${fromVer}, migrating to v${SCHEMA_VERSION}`);
     for (let v = fromVer + 1; v <= SCHEMA_VERSION; v++) {
       if (MIGRATIONS[v]) {
-        try { state = MIGRATIONS[v](state); console.log(`[Migration] v${v} applied`); }
-        catch(e) { console.warn(`[Migration] v${v} failed:`, e.message); }
+        try {
+          s = MIGRATIONS[v](s);
+          console.log(`[Migration] v${v} applied`);
+        } catch (e) {
+          console.warn(`[Migration] v${v} failed:`, e.message);
+        }
       }
     }
-    state._schemaVersion = SCHEMA_VERSION;
+    s._schemaVersion = SCHEMA_VERSION;
+    return s;
   }
- }
-  } catch(e) { console.warn('Load error:', e); }
-  boot();
-  // C1: Restore live cache (positions, history, prices) from localStorage
-  try {
-    const cacheRaw = localStorage.getItem('defiGhostLiveCache_v1');
-    if (cacheRaw) {
-      const cache = JSON.parse(cacheRaw);
-      const ageMin = (Date.now() - (cache.timestamp || 0)) / 60000;
-      // Use cache if less than 30 min old
-      if (ageMin < 30 && cache.data) {
-        if (cache.data.positions) live.positions = cache.data.positions;
-        if (cache.data.history) live.history = cache.data.history;
-        if (cache.data.prices) live.prices = cache.data.prices;
-        if (cache.data.eurRate) live.eurRate = cache.data.eurRate;
-        live.cacheAgeMin = Math.floor(ageMin);
-        console.log(`[Cache] Restored live state from cache (${Math.floor(ageMin)} min old)`);
-      } else {
-        console.log(`[Cache] Cache too old (${Math.floor(ageMin)} min) — discarded`);
+
+  function applyV1Legacy(v1) {
+    // v1 → v2 field renames (preserved from original loadState)
+    try {
+      if (v1.wallets?.length) {
+        state.wallets = v1.wallets.map(w => ({
+          ...w, sol: w.sol || '', apiKey: w.apiKey || w.etherscanKey || '',
+          tgToken: '', tgChat: '',
+        }));
+        state.activeWId = v1.activeWalletId || v1.activeWId || v1.wallets[0]?.id || null;
       }
+      if (v1.colaterais?.length) {
+        state.collateral = v1.colaterais.map(c => ({
+          ...c,
+          acqDate: c.acquired_date || c.acqDate || c.date,
+          depDate: c.date || c.depDate,
+          eur: c.amount_eur || c.eur,
+          qty: c.amount_crypto || c.qty,
+          walletId: c.walletId || state.wallets[0]?.id,
+        }));
+      }
+      console.log('[Migration] v1 → v2 applied:', state.wallets.length, 'wallets');
+      saveState();  // Persist the migrated state
+    } catch (e) {
+      console.warn('[Migration] v1 → v2 failed:', e.message);
     }
-  } catch(e) {
-    console.warn('[Cache] Failed to restore:', e.message);
   }
+
+  // ── Async load with sync fallback ──
+  // We use async/await but boot() will be called inside.
+  // localStorage path is synchronous so the app boots immediately on legacy data.
+  (async () => {
+    try {
+      const result = await storageManager.load();
+
+      if (result.source === 'fresh') {
+        // No prior state — fresh install. Use defaults already in `state`.
+        console.log('[loadState] fresh install');
+      } else if (result.needsV1Migration) {
+        applyV1Legacy(result.state);
+      } else if (result.state) {
+        // Apply loaded state, then migrations
+        const migrated = applyMigrations(result.state);
+        Object.assign(state, migrated);
+      }
+
+      // Request browser persistence (best effort)
+      storageManager.requestPersistence().catch(() => {});
+
+      boot();
+
+      // ── Restore live cache (positions, history, prices) ──
+      try {
+        const cacheRaw = localStorage.getItem('defiGhostLiveCache_v1');
+        if (cacheRaw) {
+          const cache = JSON.parse(cacheRaw);
+          const ageMin = (Date.now() - (cache.timestamp || 0)) / 60000;
+          if (ageMin < 30 && cache.data) {
+            if (cache.data.positions) live.positions = cache.data.positions;
+            if (cache.data.history) live.history = cache.data.history;
+            if (cache.data.prices) live.prices = cache.data.prices;
+            if (cache.data.eurRate) live.eurRate = cache.data.eurRate;
+            live.cacheAgeMin = Math.floor(ageMin);
+            console.log(`[Cache] Restored live state (${Math.floor(ageMin)} min old)`);
+          } else {
+            console.log(`[Cache] Too old (${Math.floor(ageMin)} min) — discarded`);
+          }
+        }
+      } catch (e) {
+        console.warn('[Cache] Failed to restore:', e.message);
+      }
+    } catch (err) {
+      console.warn('[loadState] failure, attempting boot anyway:', err.message);
+      try { boot(); } catch (e) { console.error('[boot] failed:', e); }
+    }
+  })();
 }
 
 function saveState() {
-  const s = JSON.stringify(state);
-  localStorage.setItem('ghost2_state', s);
-  try { window.storage.set('ghost2_state', s); } catch(e) {}
+  // Hybrid save (Sprint 2):
+  //  1. SYNC: localStorage mirror (small/fast, immediate safety)
+  //  2. ASYNC: IndexedDB main store + auto-backup rotation (fire-and-forget)
+  //
+  // App keeps working even if either layer fails.
+  storageManager.saveLocalStorageMirror(state);
+  storageManager.save(state).catch(err => {
+    console.warn('[saveState] async IDB persist failed:', err.message);
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -6120,6 +6427,153 @@ function renderFiscal(w) {
 // ══════════════════════════════════════════════════════════
 // SETTINGS TAB
 // ══════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────
+// Sprint 2: Diagnostics & Backups (UI functions)
+// ─────────────────────────────────────────────────
+async function refreshDiagnostics() {
+  const el = document.getElementById('diagPanel');
+  if (!el) return;
+  el.innerHTML = '<div style="opacity:0.7;padding:0.5rem 0">A carregar…</div>';
+  try {
+    const idbSupported = idb.isSupported() !== false;  // null or true → assume supported
+    const backups = await storageManager.listBackups();
+    const usage = await storageManager.estimateUsage();
+    const stateBytes = (() => {
+      try { return JSON.stringify(state).length; } catch(e) { return 0; }
+    })();
+
+    const fmtBytes = (b) => {
+      if (b < 1024) return `${b} B`;
+      if (b < 1024*1024) return `${(b/1024).toFixed(1)} KB`;
+      return `${(b/1024/1024).toFixed(2)} MB`;
+    };
+    const fmtDate = (ts) => ts ? new Date(ts).toLocaleString('pt-PT', { dateStyle:'short', timeStyle:'short' }) : '—';
+
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:0.8rem;margin-bottom:1rem">
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">Storage Backend</div>
+          <div style="font-family:var(--num);font-weight:600;color:${idbSupported?'var(--green)':'var(--amber)'}">${idbSupported?'IndexedDB ✓':'localStorage only ⚠'}</div>
+          <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem">${idbSupported?'auto-backups activos':'fallback mode'}</div>
+        </div>
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">Estado actual</div>
+          <div style="font-family:var(--num);font-weight:600;color:var(--gold)">${fmtBytes(stateBytes)}</div>
+          <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem">Schema v${state._schemaVersion||1}</div>
+        </div>
+        ${usage ? `
+        <div style="padding:0.75rem 1rem;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius)">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.3rem">Quota Browser</div>
+          <div style="font-family:var(--num);font-weight:600;color:var(--text)">${fmtBytes(usage.usedBytes)} / ${fmtBytes(usage.quotaBytes)}</div>
+          <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem">${usage.usedPct.toFixed(2)}% usado</div>
+        </div>
+        ` : ''}
+      </div>
+
+      <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem">Auto-backups (rolling)</div>
+      ${backups.length === 0 ? `
+        <div style="padding:0.6rem 0;font-size:0.78rem;color:var(--text-muted)">Sem backups ainda. Primeiro backup é criado após próxima alteração.</div>
+      ` : `
+        <div class="table-wrap">
+          <table style="font-size:0.78rem">
+            <thead><tr><th>#</th><th>Data</th><th>Schema</th><th>Tamanho</th><th></th></tr></thead>
+            <tbody>
+              ${backups.map(b => `
+                <tr>
+                  <td style="font-family:var(--mono)">backup_${b.index}</td>
+                  <td>${fmtDate(b.savedAt)}</td>
+                  <td>v${b.schemaVersion||'?'}</td>
+                  <td style="font-family:var(--num)">${fmtBytes(b.size)}</td>
+                  <td><button class="btn btn-outline btn-xs" onclick="restoreBackupFromDiag(${b.index})">Restaurar</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    `;
+  } catch (err) {
+    el.innerHTML = `<div style="color:var(--red);font-size:0.85rem">Diagnóstico falhou: ${err.message}</div>`;
+  }
+}
+
+async function restoreBackupFromDiag(index) {
+  if (!confirm(`Restaurar backup #${index}? O estado actual vai ser substituído (mas guardado também noutro slot de backup).`)) return;
+  try {
+    const restored = await storageManager.restoreBackup(index);
+    if (restored?.state) {
+      Object.assign(state, restored.state);
+      saveState();
+      toast(`✓ Backup #${index} restaurado`, 'success');
+      render();
+    }
+  } catch (err) {
+    toast('Restauro falhou: ' + err.message, 'warn');
+  }
+}
+
+function exportFullBackup() {
+  try {
+    const blob = storageManager.exportToBlob(state);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+    const w = activeWallet();
+    a.href = url;
+    a.download = `aurum_backup_${date}_${(w?.name||'wallet').replace(/\W+/g,'_')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('✓ Backup exportado (guarda no Drive/Dropbox)', 'success');
+  } catch (err) {
+    toast('Export falhou: ' + err.message, 'warn');
+  }
+}
+
+async function importFullBackup(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!confirm(`Importar "${file.name}"? O estado actual vai ser substituído. Certifica-te que tens backup do estado actual.`)) {
+    event.target.value = '';
+    return;
+  }
+  try {
+    const text = await file.text();
+    const importedState = await storageManager.importFromText(text);
+    if (importedState) {
+      // Snapshot current state into backup before overwrite
+      await storageManager.save(state, { skipBackup: false });
+      // Apply imported
+      Object.assign(state, importedState);
+      saveState();
+      toast(`✓ Backup importado (${file.name})`, 'success');
+      render();
+    }
+  } catch (err) {
+    toast('Import falhou: ' + err.message, 'warn');
+  } finally {
+    event.target.value = '';
+  }
+}
+
+// Auto-refresh diagnostics whenever Settings tab is shown
+const _origShowTab = window.showTab;
+if (typeof _origShowTab === 'function' && !window._diagHookInstalled) {
+  window._diagHookInstalled = true;
+  window.showTab = function(name) {
+    const r = _origShowTab.apply(this, arguments);
+    if (name === 'settings') {
+      setTimeout(() => refreshDiagnostics(), 100);
+    }
+    return r;
+  };
+}
+
+window.refreshDiagnostics = refreshDiagnostics;
+window.restoreBackupFromDiag = restoreBackupFromDiag;
+window.exportFullBackup = exportFullBackup;
+window.importFullBackup = importFullBackup;
+
 function renderSettings(w) {
   return `
     <div class="section-row" style="margin-bottom:1.5rem">
@@ -6257,6 +6711,37 @@ function renderSettings(w) {
       </div>
     </div>
 
+    <!-- ── Diagnostics & Backups (Sprint 2) ── -->
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-head">
+        <span class="panel-title">🛡️ Diagnostics & Backups</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">IndexedDB + auto-snapshots</span>
+      </div>
+      <div class="panel-body">
+        <div id="diagPanel">
+          <div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0">
+            <span style="opacity:0.7">A carregar diagnóstico…</span>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1rem">
+          <button class="btn btn-outline btn-sm" onclick="refreshDiagnostics()">↺ Atualizar</button>
+          <button class="btn btn-gold btn-sm" onclick="exportFullBackup()">⬇ Exportar Backup Completo</button>
+          <label class="btn btn-outline btn-sm" style="cursor:pointer">
+            ⬆ Importar Backup
+            <input type="file" accept=".json" style="display:none" onchange="importFullBackup(event)">
+          </label>
+        </div>
+        <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
+          <span>ℹ</span>
+          <div>
+            <strong>O Aurum guarda os teus dados no browser</strong> (IndexedDB + localStorage como fallback).
+            Não há servidor, ninguém os vê. Auto-backup mantém as últimas 5 versões — podes restaurar a qualquer momento.<br>
+            <strong>Exporta um backup completo</strong> para guardar em segurança (Drive, Dropbox, etc).
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Sobre ── -->
     <div class="panel">
       <div class="panel-head"><span class="panel-title">ℹ️ Sobre o Aurum</span></div>
@@ -6282,7 +6767,7 @@ function renderSettings(w) {
           <div>
             <div style="font-family:var(--display);font-size:1.3rem;font-weight:600;color:var(--gold);letter-spacing:0.06em">AURUM</div>
             <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.25em;color:var(--text-muted);margin-top:0.2rem">YOUR DEFI · REFINED</div>
-            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.6rem">Versão 2.6 · Schema v${state._schemaVersion||3}</div>
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.6rem">Versão 3.0 · Schema v${state._schemaVersion||4} · IndexedDB ✓</div>
           </div>
         </div>
         <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.55">
