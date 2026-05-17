@@ -4469,7 +4469,7 @@ const DEFILLAMA_BASE = 'https://coins.llama.fi';
 const ECB_RATE_BASE  = 'https://api.frankfurter.dev/v1';
 const PRICE_IDB_STORE_KEY_PREFIX = 'price:';   // price:USDC_eth_2024-03-15 → { usd, eur }
 const RATE_IDB_STORE_KEY_PREFIX  = 'eurrate:'; // eurrate:2024-03-15 → 0.92
-const PRICE_FETCH_DELAY_MS = 200;              // 5 req/s to be safe
+const PRICE_FETCH_DELAY_MS = 1100;            // ~55 req/min (margem sob ~120/min limite DefiLlama)
 const PRICE_BATCH_SIZE = 50;                   // up to 50 coins per /batchHistorical call
 
 // Curated mapping: common assets → DefiLlama coin identifiers
@@ -4510,6 +4510,12 @@ const COIN_ID_MAP = {
   'PYUSD':  'coingecko:paypal-usd',
 };
 
+// Normalize block timestamp to day-start (UTC midnight) for daily granularity
+function dayStartTs(ts) {
+  if (typeof ts !== 'number' || ts <= 0) return null;
+  return Math.floor(ts / 86400) * 86400;
+}
+
 // Resolve UniversalEvent → DefiLlama coin ID (or null if unknown)
 function resolveCoinId(asset, chain, contract) {
   if (!asset) return null;
@@ -4542,6 +4548,32 @@ const defiLlamaAdapter = (() => {
     _lastCallAt = Date.now();
   }
 
+  // Fetch with exponential backoff on HTTP 429 (rate limit)
+  async function _fetchWithRetry(url, opts = {}, label = 'defillama') {
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await _throttle();
+      let res = null;
+      try {
+        res = await safeFetch(url, opts, label);
+      } catch (err) {
+        if (attempt < maxAttempts) { await _delay(1000 * attempt); continue; }
+        return null;
+      }
+      if (!res) return null;
+      if (res.ok) { try { return await res.json(); } catch { return null; } }
+      if (res.status === 429 && attempt < maxAttempts) {
+        const wait = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s
+        errorLogger.warn(`defillama: 429 backoff ${wait}ms (${attempt}/${maxAttempts})`,
+                         { url, attempt });
+        await _delay(wait);
+        continue;
+      }
+      return null;
+    }
+    return null;
+  }
+
   // Single historical lookup
   async function getHistoricalPrice(coinId, timestamp) {
     if (!coinId || !timestamp) return null;
@@ -4566,40 +4598,53 @@ const defiLlamaAdapter = (() => {
     }
   }
 
-  // Batch historical (preferred for efficiency)
-  // requests: [{ coinId, timestamp }, ...]
-  // Returns: Map<coinId_ts, price>
-  async function getBatchHistorical(requests) {
-    if (!requests?.length) return new Map();
+  // Batch historical lookup — agrupa por dia, dedup coins, até PRICE_BATCH_SIZE por request
+  // requests: Array<{ coinId, timestamp }>
+  // Returns: Map<"coinId:dayTs", { price, confidence, symbol, noCoverage }>
+  async function getHistoricalPricesBatch(requests) {
+    const results = new Map();
+    if (!Array.isArray(requests) || requests.length === 0) return results;
 
-    // Group by coinId to use /batchHistorical format
-    const byCoin = {};
-    for (const { coinId, timestamp } of requests) {
-      if (!byCoin[coinId]) byCoin[coinId] = [];
-      byCoin[coinId].push(timestamp);
+    // Group by dayStart timestamp; dedup coins per day
+    const byDay = new Map();
+    for (const r of requests) {
+      if (!r.coinId || !r.timestamp) continue;
+      const day = dayStartTs(r.timestamp);
+      if (!day) continue;
+      if (!byDay.has(day)) byDay.set(day, new Set());
+      byDay.get(day).add(r.coinId);
     }
-    const coinsParam = JSON.stringify(byCoin);
 
-    await _throttle();
-    try {
-      const url = `${DEFILLAMA_BASE}/batchHistorical?coins=${encodeURIComponent(coinsParam)}`;
-      const res = await safeFetch(url, { timeout: 30000 }, 'defillama.batch');
-      if (!res.ok) return new Map();
-      const data = await res.json();
-      const result = new Map();
-      for (const [coinId, info] of Object.entries(data?.coins || {})) {
-        for (const p of (info.prices || [])) {
-          result.set(`${coinId}_${p.timestamp}`, p.price);
+    for (const [day, coinSet] of byDay.entries()) {
+      const coins = [...coinSet];
+      for (let i = 0; i < coins.length; i += PRICE_BATCH_SIZE) {
+        const chunk = coins.slice(i, i + PRICE_BATCH_SIZE);
+        const coinsParam = chunk.map(encodeURIComponent).join(',');
+        const url = `${DEFILLAMA_BASE}/prices/historical/${day}/${coinsParam}?searchWidth=4h`;
+
+        const data = await _fetchWithRetry(url, { timeout: 30000 }, 'defillama.batch');
+
+        for (const coinId of chunk) {
+          const key = `${coinId}:${day}`;
+          const entry = data?.coins?.[coinId];
+          if (entry && typeof entry.price === 'number') {
+            results.set(key, {
+              price: entry.price,
+              confidence: entry.confidence ?? 0,
+              symbol: entry.symbol,
+              timestamp: entry.timestamp,
+            });
+          } else {
+            // Distinguir fetch error (data===null) de no-coverage (response ok mas coin ausente)
+            results.set(key, { price: null, noCoverage: data !== null });
+          }
         }
       }
-      return result;
-    } catch (err) {
-      errorLogger.warn(`defillama.batchHistorical: ${err.message}`);
-      return new Map();
     }
+    return results;
   }
 
-  return { getHistoricalPrice, getBatchHistorical };
+  return { getHistoricalPrice, getHistoricalPricesBatch };
 })();
 
 // ─────────────────────────────────────────────────
@@ -4737,61 +4782,136 @@ const priceOracle = (() => {
   // Enrich a batch of UniversalEvents with priceEUR + priceUSD
   // opts: { onProgress, signal }
   async function enrichEventsWithPrices(events, opts = {}) {
-    if (!events?.length) return { enriched: 0, skipped: 0, failed: 0 };
+    if (!events?.length) return { enriched: 0, skipped: 0, failed: 0, total: 0 };
     const stats = { enriched: 0, skipped: 0, failed: 0, total: events.length };
 
-    let i = 0;
+    // ─── PASS 1: classify events, build minimal lookup set ──────────────
+    const eventsToPrice = [];           // [{ event, coinId, dayTs, dateStr }]
+    const fetchSet = new Map();         // "coinId:dayTs" → { coinId, timestamp }
+    const requiredRates = new Set();    // unique dateStrs for ECB rates
+
     for (const e of events) {
       if (opts.signal?.aborted) break;
-      i++;
-      // Skip self-transfers (no fiscal impact) + zero amounts
+
+      // Self-transfers + zero amounts (no fiscal impact)
       if (e.direction === 'self' || !e.amount || e.amount === 0) {
-        stats.skipped++;
-        continue;
+        stats.skipped++; continue;
       }
-      // Skip if already enriched
+      // Already enriched
       if (typeof e.priceEUR === 'number' && typeof e.priceUSD === 'number') {
-        stats.skipped++;
-        continue;
+        stats.skipped++; continue;
       }
-      // Skip NFTs (Art. 10 nº 18 — excluded from PT crypto tax regime)
+      // NFTs excluded (Art. 10 nº 18)
       if (e.category === 'erc721' || e.category === 'erc1155') {
-        e.priceEUR = null;
-        e.priceUSD = null;
-        e.priceNote = 'nft_excluded';
-        stats.skipped++;
-        continue;
+        e.priceEUR = null; e.priceUSD = null; e.priceNote = 'nft_excluded';
+        stats.skipped++; continue;
       }
 
-      try {
-        const usd = await getPriceUSD(e.asset, e.chain, e.assetContract, e.date,
-                                       e.timestamp || Math.floor(new Date(e.date).getTime()/1000));
-        if (usd === null) {
-          e.priceUSD = null;
-          e.priceEUR = null;
-          e.priceNote = 'no_price_data';
-          stats.failed++;
+      const coinId = resolveCoinId(e.asset, e.chain, e.assetContract);
+      if (!coinId) {
+        e.priceEUR = null; e.priceUSD = null; e.priceNote = 'no_mapping';
+        stats.failed++; continue;
+      }
+
+      const blockTs = e.timestamp || Math.floor(new Date(e.date).getTime() / 1000);
+      const dayTs = dayStartTs(blockTs);
+      if (!dayTs) {
+        e.priceEUR = null; e.priceUSD = null; e.priceNote = 'no_timestamp';
+        stats.failed++; continue;
+      }
+      const dateStr = e.date || new Date(dayTs * 1000).toISOString().slice(0, 10);
+
+      eventsToPrice.push({ event: e, coinId, dayTs, dateStr });
+      fetchSet.set(`${coinId}:${dayTs}`, { coinId, timestamp: dayTs });
+      requiredRates.add(dateStr);
+    }
+
+    // ─── PASS 2: check USD cache, build list of what to fetch ───────────
+    const usdCache = new Map();         // "asset:chain:dateStr" → price
+    const stillToFetch = new Map();     // "coinId:dayTs" → { coinId, timestamp }
+
+    for (const item of eventsToPrice) {
+      const cacheKey = `${item.event.asset}:${item.event.chain}:${item.dateStr}`;
+      if (usdCache.has(cacheKey)) continue;
+      const cached = await priceCache.getPriceUSD(item.event.asset, item.event.chain, item.dateStr);
+      if (typeof cached === 'number') {
+        usdCache.set(cacheKey, cached);
+      } else {
+        const lookupKey = `${item.coinId}:${item.dayTs}`;
+        if (fetchSet.has(lookupKey)) stillToFetch.set(lookupKey, fetchSet.get(lookupKey));
+      }
+    }
+
+    // ─── PASS 3: batch fetch USD prices ─────────────────────────────────
+    opts.onProgress?.({
+      phase: 'fetching', i: 0, total: stillToFetch.size,
+      enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+    });
+    let fetchedResults = new Map();
+    if (stillToFetch.size > 0 && !opts.signal?.aborted) {
+      fetchedResults = await defiLlamaAdapter.getHistoricalPricesBatch([...stillToFetch.values()]);
+    }
+
+    // ─── PASS 4: pre-fetch EUR rates (ECB) ──────────────────────────────
+    const rateCache = new Map();
+    for (const dateStr of requiredRates) {
+      if (opts.signal?.aborted) break;
+      rateCache.set(dateStr, await getEurRate(dateStr));
+    }
+
+    // ─── PASS 5: assign prices + persist USD cache ──────────────────────
+    let i = 0;
+    for (const { event, coinId, dayTs, dateStr } of eventsToPrice) {
+      if (opts.signal?.aborted) break;
+      i++;
+      const cacheKey = `${event.asset}:${event.chain}:${dateStr}`;
+      let usd = null;
+      let priceNote = null;
+
+      if (usdCache.has(cacheKey)) {
+        usd = usdCache.get(cacheKey);
+      } else {
+        const r = fetchedResults.get(`${coinId}:${dayTs}`);
+        if (r && typeof r.price === 'number') {
+          if ((r.confidence ?? 1) < 0.5) {
+            priceNote = 'low_confidence';   // ignora preço pobre (não polui base fiscal)
+          } else {
+            usd = r.price;
+            try {
+              await priceCache.setPriceUSD(event.asset, event.chain, dateStr, usd);
+              usdCache.set(cacheKey, usd);
+            } catch (err) {
+              errorLogger.warn(`priceCache.setPriceUSD: ${err.message}`,
+                               { asset: event.asset, chain: event.chain, dateStr });
+            }
+          }
+        } else if (r?.noCoverage) {
+          priceNote = 'no_coverage';
         } else {
-          const rate = await getEurRate(e.date);
-          e.priceUSD = usd;
-          e.priceEUR = (rate !== null) ? usd * rate : null;
-          if (rate === null) e.priceNote = 'no_eur_rate';
-          stats.enriched++;
+          priceNote = 'fetch_error';        // 429 ou network — retentar próxima sessão
         }
-      } catch (err) {
-        e.priceUSD = null;
-        e.priceEUR = null;
-        e.priceNote = 'fetch_error';
-        stats.failed++;
-        errorLogger.warn(`priceOracle.enrich: ${err.message}`,
-                         { asset: e.asset, chain: e.chain, date: e.date });
       }
 
-      opts.onProgress?.({
-        phase: 'enriching',
-        i, total: stats.total,
-        enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
-      });
+      const rate = rateCache.get(dateStr);
+
+      if (typeof usd === 'number' && typeof rate === 'number') {
+        event.priceUSD = usd;
+        event.priceEUR = usd * rate;
+        event.priceNote = null;
+        stats.enriched++;
+      } else {
+        event.priceUSD = null;
+        event.priceEUR = null;
+        event.priceNote = priceNote || (rate == null ? 'no_eur_rate' : 'no_price');
+        stats.failed++;
+      }
+
+      if (i % 50 === 0 || i === eventsToPrice.length) {
+        opts.onProgress?.({
+          phase: 'enriching', i, total: eventsToPrice.length,
+          enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+        });
+      }
     }
 
     return stats;
