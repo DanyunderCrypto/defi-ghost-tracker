@@ -4139,6 +4139,10 @@ const mempoolAdapter = (() => {
       const res = await safeFetch(url, { timeout: 30000 }, 'mempool');
       if (!res.ok) {
         if (res.status === 404) return null;  // No txs / address not found
+        if (res.status === 400) {
+          // Bad request usually means invalid checksum
+          throw new Error('Endereço/xpub inválido — verifica o checksum (cópia exacta?)');
+        }
         if ((res.status === 429 || res.status >= 500) && attempt < 3) {
           await _delay(Math.pow(2, attempt) * 1000);
           return _get(url, attempt + 1);
@@ -4147,7 +4151,7 @@ const mempoolAdapter = (() => {
       }
       return await res.json();
     } catch (err) {
-      if (attempt < 3 && !err.message.includes('AbortError')) {
+      if (attempt < 3 && !err.message.includes('AbortError') && !err.message.includes('checksum')) {
         await _delay(Math.pow(2, attempt) * 1000);
         return _get(url, attempt + 1);
       }
@@ -4162,12 +4166,14 @@ const mempoolAdapter = (() => {
     return /^(xpub|ypub|zpub|Xpub|Ypub|Zpub)[1-9A-HJ-NP-Za-km-z]{100,120}$/.test(s);
   }
 
-  // Detect plain BTC address
+  // Detect plain BTC address (basic format check — Mempool does real validation)
   function isBtcAddress(input) {
     if (!input || typeof input !== 'string') return false;
     const s = input.trim();
-    // Legacy P2PKH (1...), P2SH (3...), Bech32 (bc1q...), Bech32m (bc1p...)
-    return /^(bc1[a-z0-9]{25,89}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(s);
+    // Bech32/Bech32m data part allows: a-z (excluding b, i, o, 1 which are excluded for clarity) + 0-9 (excluding 0, 1)
+    // Actual Bech32 charset: qpzry9x8gf2tvdw0s3jn54khce6mua7l
+    // For format validation, we accept the broader range and let Mempool reject bad checksums.
+    return /^(bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{25,89}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(s);
   }
 
   // Fetch transactions for a single address (paginated, up to 1500 txs)
