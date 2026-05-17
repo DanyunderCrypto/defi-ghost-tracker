@@ -4441,6 +4441,379 @@ window.aurumBitcoin = bitcoinIndexer;
 window.aurumMempool = mempoolAdapter;
 
 
+
+// ─────────────────────────────────────────────────
+// Sprint 7: PRICE ORACLE
+//
+// For each UniversalEvent, attach historical EUR price at block timestamp.
+// Required by Sprint 8 (tax engine) for FIFO basis and disposal gain calc.
+//
+// Architecture:
+//   defiLlamaAdapter  — historical USD prices via coins.llama.fi
+//                       Free API, no key. Rate-limited (~120 req/min).
+//   ecbRateAdapter    — historical USD→EUR rates via Frankfurter (ECB data)
+//                       Free API, no key. Daily rates from 1999+.
+//   priceCache        — IndexedDB store, permanent (prices are immutable).
+//                       Granularity: daily (YYYY-MM-DD).
+//   priceOracle       — orchestrator: getPriceEUR(asset, chain, ts) → number|null
+//
+// Key principles:
+//   - NEVER fabricate prices. Missing → null, UI shows "—" (NOT €0).
+//   - Daily granularity is sufficient for PT tax compliance.
+//   - Prices cached forever (historical prices are immutable).
+//   - Batch requests where possible to respect rate limits.
+//   - Self-transfers and zero-amount events skip price lookup (no basis impact).
+// ─────────────────────────────────────────────────
+
+const DEFILLAMA_BASE = 'https://coins.llama.fi';
+const ECB_RATE_BASE  = 'https://api.frankfurter.dev/v1';
+const PRICE_IDB_STORE_KEY_PREFIX = 'price:';   // price:USDC_eth_2024-03-15 → { usd, eur }
+const RATE_IDB_STORE_KEY_PREFIX  = 'eurrate:'; // eurrate:2024-03-15 → 0.92
+const PRICE_FETCH_DELAY_MS = 200;              // 5 req/s to be safe
+const PRICE_BATCH_SIZE = 50;                   // up to 50 coins per /batchHistorical call
+
+// Curated mapping: common assets → DefiLlama coin identifiers
+// Format: "{chain}:{address}" for ERC20s, or "coingecko:{slug}" for native/listed
+const COIN_ID_MAP = {
+  // Native chains
+  'ETH':  'coingecko:ethereum',
+  'WETH': { eth: 'ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+            base: 'base:0x4200000000000000000000000000000000000006',
+            arbitrum: 'arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+            optimism: 'optimism:0x4200000000000000000000000000000000000006' },
+  'BTC':  'coingecko:bitcoin',
+  'WBTC': 'coingecko:wrapped-bitcoin',
+  'MATIC': 'coingecko:matic-network',
+  // Stablecoins (per chain)
+  'USDC': { eth: 'ethereum:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+            base: 'base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+            arbitrum: 'arbitrum:0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+            optimism: 'optimism:0x0b2c639c533813f4aa9d7837caf62653d097ff85' },
+  'USDC.E': { arbitrum: 'arbitrum:0xff970a61a04b1ca14834a43f5de4533ebddb5cc8' },
+  'USDT': { eth: 'ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7',
+            arbitrum: 'arbitrum:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+            optimism: 'optimism:0x94b008aa00579c1307b0ef2c499ad98a8ce58e58' },
+  'DAI':  { eth: 'ethereum:0x6b175474e89094c44da98b954eedeac495271d0f',
+            base: 'base:0x50c5725949a6f0c72e6c4a641f24049a917db0cb',
+            arbitrum: 'arbitrum:0xda10009cbd5d07dd0cecc66161fc93d7c9000da1' },
+  // Staking derivatives — keys uppercased (resolveCoinId does toUpperCase)
+  'STETH':  'coingecko:staked-ether',
+  'WSTETH': 'coingecko:wrapped-steth',
+  'RETH':   'coingecko:rocket-pool-eth',
+  'EETH':   'coingecko:ether-fi-staked-eth',
+  'WEETH':  'coingecko:wrapped-eeth',
+  'CBBTC':  'coingecko:coinbase-wrapped-btc',
+  'CBETH':  'coingecko:coinbase-wrapped-staked-eth',
+  // Stablecoins exotic
+  'EURE':   'coingecko:monerium-eur-money',
+  'GHO':    'coingecko:gho',
+  'PYUSD':  'coingecko:paypal-usd',
+};
+
+// Resolve UniversalEvent → DefiLlama coin ID (or null if unknown)
+function resolveCoinId(asset, chain, contract) {
+  if (!asset) return null;
+  const ASSET = asset.toUpperCase();
+
+  // Prefer direct contract address if available
+  if (contract && contract.startsWith('0x') && contract.length === 42) {
+    return `${chain}:${contract.toLowerCase()}`;
+  }
+
+  // Check curated map
+  const entry = COIN_ID_MAP[ASSET];
+  if (typeof entry === 'string') return entry;
+  if (typeof entry === 'object') return entry[chain] || null;
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────
+// DefiLlama adapter — historical USD prices
+// ─────────────────────────────────────────────────
+const defiLlamaAdapter = (() => {
+  let _lastCallAt = 0;
+  function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  async function _throttle() {
+    const since = Date.now() - _lastCallAt;
+    if (since < PRICE_FETCH_DELAY_MS) {
+      await _delay(PRICE_FETCH_DELAY_MS - since);
+    }
+    _lastCallAt = Date.now();
+  }
+
+  // Single historical lookup
+  async function getHistoricalPrice(coinId, timestamp) {
+    if (!coinId || !timestamp) return null;
+    await _throttle();
+    try {
+      const url = `${DEFILLAMA_BASE}/prices/historical/${timestamp}/${encodeURIComponent(coinId)}`;
+      const res = await safeFetch(url, { timeout: 20000 }, 'defillama');
+      if (!res.ok) return null;
+      const data = await res.json();
+      const coinData = data?.coins?.[coinId];
+      if (!coinData || typeof coinData.price !== 'number') return null;
+      return {
+        price: coinData.price,
+        confidence: coinData.confidence ?? 0,
+        symbol: coinData.symbol,
+        timestamp: coinData.timestamp,
+      };
+    } catch (err) {
+      errorLogger.warn(`defillama.getHistoricalPrice: ${err.message}`,
+                       { coin: coinId, ts: timestamp });
+      return null;
+    }
+  }
+
+  // Batch historical (preferred for efficiency)
+  // requests: [{ coinId, timestamp }, ...]
+  // Returns: Map<coinId_ts, price>
+  async function getBatchHistorical(requests) {
+    if (!requests?.length) return new Map();
+
+    // Group by coinId to use /batchHistorical format
+    const byCoin = {};
+    for (const { coinId, timestamp } of requests) {
+      if (!byCoin[coinId]) byCoin[coinId] = [];
+      byCoin[coinId].push(timestamp);
+    }
+    const coinsParam = JSON.stringify(byCoin);
+
+    await _throttle();
+    try {
+      const url = `${DEFILLAMA_BASE}/batchHistorical?coins=${encodeURIComponent(coinsParam)}`;
+      const res = await safeFetch(url, { timeout: 30000 }, 'defillama.batch');
+      if (!res.ok) return new Map();
+      const data = await res.json();
+      const result = new Map();
+      for (const [coinId, info] of Object.entries(data?.coins || {})) {
+        for (const p of (info.prices || [])) {
+          result.set(`${coinId}_${p.timestamp}`, p.price);
+        }
+      }
+      return result;
+    } catch (err) {
+      errorLogger.warn(`defillama.batchHistorical: ${err.message}`);
+      return new Map();
+    }
+  }
+
+  return { getHistoricalPrice, getBatchHistorical };
+})();
+
+// ─────────────────────────────────────────────────
+// ECB rate adapter — historical USD/EUR rates
+// ─────────────────────────────────────────────────
+const ecbRateAdapter = (() => {
+  let _lastCallAt = 0;
+  function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  async function _throttle() {
+    const since = Date.now() - _lastCallAt;
+    if (since < PRICE_FETCH_DELAY_MS) {
+      await _delay(PRICE_FETCH_DELAY_MS - since);
+    }
+    _lastCallAt = Date.now();
+  }
+
+  // dateStr: YYYY-MM-DD. Returns: USD→EUR rate (e.g. 0.92 = 1 USD = 0.92 EUR)
+  async function getUsdToEur(dateStr) {
+    if (!dateStr) return null;
+    // ECB does not publish weekend/holiday rates; Frankfurter falls back to last available
+    await _throttle();
+    try {
+      const url = `${ECB_RATE_BASE}/${dateStr}?from=USD&to=EUR`;
+      const res = await safeFetch(url, { timeout: 20000 }, 'frankfurter');
+      if (!res.ok) return null;
+      const data = await res.json();
+      const rate = data?.rates?.EUR;
+      return typeof rate === 'number' ? rate : null;
+    } catch (err) {
+      errorLogger.warn(`ecb.getUsdToEur: ${err.message}`, { date: dateStr });
+      return null;
+    }
+  }
+
+  return { getUsdToEur };
+})();
+
+// ─────────────────────────────────────────────────
+// Price cache (IndexedDB-backed, daily granularity, never expires)
+// Reuses the existing `idb` adapter from Sprint 2.
+// ─────────────────────────────────────────────────
+const priceCache = (() => {
+  return {
+    async getPriceUSD(asset, chain, dateStr) {
+      try {
+        const k = `${PRICE_IDB_STORE_KEY_PREFIX}${asset}_${chain}_${dateStr}`;
+        const v = await idb.get(k);
+        return (v && typeof v.usd === 'number') ? v.usd : null;
+      } catch (e) { return null; }
+    },
+    async setPriceUSD(asset, chain, dateStr, usd) {
+      try {
+        const k = `${PRICE_IDB_STORE_KEY_PREFIX}${asset}_${chain}_${dateStr}`;
+        await idb.set(k, { usd, fetchedAt: Date.now() });
+      } catch (e) { /* ignore */ }
+    },
+    async getRate(dateStr) {
+      try {
+        const k = `${RATE_IDB_STORE_KEY_PREFIX}${dateStr}`;
+        const v = await idb.get(k);
+        return (v && typeof v.rate === 'number') ? v.rate : null;
+      } catch (e) { return null; }
+    },
+    async setRate(dateStr, rate) {
+      try {
+        const k = `${RATE_IDB_STORE_KEY_PREFIX}${dateStr}`;
+        await idb.set(k, { rate, fetchedAt: Date.now() });
+      } catch (e) { /* ignore */ }
+    },
+    async clear() {
+      try {
+        const keys = await idb.keys();
+        const priceKeys = (keys || []).filter(k =>
+          k.startsWith(PRICE_IDB_STORE_KEY_PREFIX) || k.startsWith(RATE_IDB_STORE_KEY_PREFIX)
+        );
+        for (const k of priceKeys) await idb.delete(k);
+        return priceKeys.length;
+      } catch (e) { return 0; }
+    },
+    async stats() {
+      try {
+        const keys = await idb.keys();
+        const prices = (keys || []).filter(k => k.startsWith(PRICE_IDB_STORE_KEY_PREFIX)).length;
+        const rates = (keys || []).filter(k => k.startsWith(RATE_IDB_STORE_KEY_PREFIX)).length;
+        return { prices, rates, total: prices + rates };
+      } catch (e) { return { prices: 0, rates: 0, total: 0 }; }
+    },
+  };
+})();
+
+// ─────────────────────────────────────────────────
+// PriceOracle (high-level API)
+// ─────────────────────────────────────────────────
+const priceOracle = (() => {
+
+  // Get USD price (1 token = X USD) at given date
+  async function getPriceUSD(asset, chain, contract, dateStr, timestamp) {
+    // 1. Try cache
+    const cached = await priceCache.getPriceUSD(asset, chain, dateStr);
+    if (cached !== null) return cached;
+
+    // 2. Resolve to DefiLlama coin ID
+    const coinId = resolveCoinId(asset, chain, contract);
+    if (!coinId) return null;
+
+    // 3. Fetch from DefiLlama
+    const r = await defiLlamaAdapter.getHistoricalPrice(coinId, timestamp);
+    if (!r || typeof r.price !== 'number') return null;
+
+    // 4. Persist to cache
+    await priceCache.setPriceUSD(asset, chain, dateStr, r.price);
+    return r.price;
+  }
+
+  // Get USD→EUR rate at given date
+  async function getEurRate(dateStr) {
+    const cached = await priceCache.getRate(dateStr);
+    if (cached !== null) return cached;
+
+    const r = await ecbRateAdapter.getUsdToEur(dateStr);
+    if (typeof r !== 'number') return null;
+    await priceCache.setRate(dateStr, r);
+    return r;
+  }
+
+  // Get full EUR price for an asset at given date
+  async function getPriceEUR(asset, chain, contract, dateStr, timestamp) {
+    const usd = await getPriceUSD(asset, chain, contract, dateStr, timestamp);
+    if (usd === null) return null;
+    const rate = await getEurRate(dateStr);
+    if (rate === null) return null;
+    return usd * rate;
+  }
+
+  // Enrich a batch of UniversalEvents with priceEUR + priceUSD
+  // opts: { onProgress, signal }
+  async function enrichEventsWithPrices(events, opts = {}) {
+    if (!events?.length) return { enriched: 0, skipped: 0, failed: 0 };
+    const stats = { enriched: 0, skipped: 0, failed: 0, total: events.length };
+
+    let i = 0;
+    for (const e of events) {
+      if (opts.signal?.aborted) break;
+      i++;
+      // Skip self-transfers (no fiscal impact) + zero amounts
+      if (e.direction === 'self' || !e.amount || e.amount === 0) {
+        stats.skipped++;
+        continue;
+      }
+      // Skip if already enriched
+      if (typeof e.priceEUR === 'number' && typeof e.priceUSD === 'number') {
+        stats.skipped++;
+        continue;
+      }
+      // Skip NFTs (Art. 10 nº 18 — excluded from PT crypto tax regime)
+      if (e.category === 'erc721' || e.category === 'erc1155') {
+        e.priceEUR = null;
+        e.priceUSD = null;
+        e.priceNote = 'nft_excluded';
+        stats.skipped++;
+        continue;
+      }
+
+      try {
+        const usd = await getPriceUSD(e.asset, e.chain, e.assetContract, e.date,
+                                       e.timestamp || Math.floor(new Date(e.date).getTime()/1000));
+        if (usd === null) {
+          e.priceUSD = null;
+          e.priceEUR = null;
+          e.priceNote = 'no_price_data';
+          stats.failed++;
+        } else {
+          const rate = await getEurRate(e.date);
+          e.priceUSD = usd;
+          e.priceEUR = (rate !== null) ? usd * rate : null;
+          if (rate === null) e.priceNote = 'no_eur_rate';
+          stats.enriched++;
+        }
+      } catch (err) {
+        e.priceUSD = null;
+        e.priceEUR = null;
+        e.priceNote = 'fetch_error';
+        stats.failed++;
+        errorLogger.warn(`priceOracle.enrich: ${err.message}`,
+                         { asset: e.asset, chain: e.chain, date: e.date });
+      }
+
+      opts.onProgress?.({
+        phase: 'enriching',
+        i, total: stats.total,
+        enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+      });
+    }
+
+    return stats;
+  }
+
+  return {
+    getPriceUSD,
+    getPriceEUR,
+    getEurRate,
+    enrichEventsWithPrices,
+    resolveCoinId,
+    clearCache: () => priceCache.clear(),
+    cacheStats: () => priceCache.stats(),
+  };
+})();
+
+window.aurumPriceOracle = priceOracle;
+window.aurumDefiLlama = defiLlamaAdapter;
+window.aurumECB = ecbRateAdapter;
+window.aurumPriceCache = priceCache;
+
+
 // ─────────────────────────────────────────────────
 // UniversalIndexer — orchestrates indexing per wallet
 // ─────────────────────────────────────────────────
@@ -4679,7 +5052,7 @@ async function loadState() {
   // IDB load happens via async/await, but the function blocks the rest of boot.
 
   // ── Schema versioning ──
-  const SCHEMA_VERSION = 6;
+  const SCHEMA_VERSION = 7;
   const MIGRATIONS = {
     1: (s) => { s.imports = s.imports || []; return s; },
     2: (s) => { s.cards = s.cards || []; return s; },
@@ -4702,13 +5075,17 @@ async function loadState() {
       return s;
     },
     6: (s) => {
-      // Sprint 6: Bitcoin support
-      // Each wallet can now have bitcoinAddress OR bitcoinXpub (xpub/ypub/zpub)
       s.wallets = (s.wallets || []).map(w => ({
         ...w,
         bitcoinAddress: w.bitcoinAddress || '',
         bitcoinXpub: w.bitcoinXpub || '',
       }));
+      return s;
+    },
+    7: (s) => {
+      // Sprint 7: Price Oracle — events now have priceUSD, priceEUR, priceNote
+      // Existing events keep their fields undefined; will be enriched on next "fetch prices" run
+      // No transformation needed — undefined fields are fine
       return s;
     },
   };
@@ -7437,6 +7814,101 @@ function renderWallets() {
 // ─────────────────────────────────────────────────
 // Sprint 4: Indexer UI controls
 // ─────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────
+// Sprint 7: Price enrichment UI control
+// Fetches historical EUR prices for the active wallet's events.
+// Cache-aware — only fetches missing prices.
+// ─────────────────────────────────────────────────
+async function fetchPricesForActiveWallet() {
+  const w = activeWallet();
+  if (!w) {
+    toast('Sem wallet activa', 'warn');
+    return;
+  }
+  if (window._priceFetchRunning) {
+    toast('Price fetch já está a correr', 'info');
+    return;
+  }
+
+  // Get all events for this wallet (EVM + BTC)
+  const wAddr = (w.addr || w.evm || '').toLowerCase();
+  const btcAddr = (w.bitcoinXpub || w.bitcoinAddress || '').toLowerCase();
+  const ids = [wAddr, btcAddr].filter(Boolean);
+  const events = (state.events || []).filter(e =>
+    ids.includes((e.walletAddress || '').toLowerCase())
+  );
+
+  if (events.length === 0) {
+    toast('Sem eventos indexados — primeiro corre o indexer', 'warn');
+    return;
+  }
+
+  // Filter events that need pricing (skip already-priced)
+  const needPrice = events.filter(e =>
+    e.direction !== 'self' &&
+    e.amount > 0 &&
+    !(typeof e.priceEUR === 'number') &&
+    e.category !== 'erc721' && e.category !== 'erc1155'
+  );
+
+  if (needPrice.length === 0) {
+    toast('✓ Todos os eventos já têm preços associados', 'success');
+    return;
+  }
+
+  if (!confirm(`Buscar preços EUR para ${needPrice.length} eventos? Demora ~${Math.ceil(needPrice.length * 0.4 / 60)} min na primeira vez (depois é cache).`)) return;
+
+  window._priceFetchRunning = true;
+  window._priceFetchController = new AbortController();
+  render();
+
+  try {
+    const stats = await priceOracle.enrichEventsWithPrices(needPrice, {
+      signal: window._priceFetchController.signal,
+      onProgress: (p) => {
+        const phaseEl = document.getElementById('priceFetchPhase');
+        const barEl = document.getElementById('priceFetchBar');
+        if (phaseEl) phaseEl.textContent = `${p.i}/${p.total} eventos · ✓ ${p.enriched} · ⤬ ${p.failed}`;
+        if (barEl) barEl.style.width = `${(p.i / p.total) * 100}%`;
+      },
+    });
+
+    saveState();
+    const msg = `✓ Preços: ${stats.enriched} OK · ${stats.failed} sem preço · ${stats.skipped} skip`;
+    toast(msg, stats.failed > stats.enriched ? 'warn' : 'success');
+  } catch (err) {
+    errorLogger.error('fetchPrices: ' + err.message);
+    toast('Price fetch falhou: ' + err.message, 'warn');
+  } finally {
+    window._priceFetchRunning = false;
+    window._priceFetchController = null;
+    render();
+  }
+}
+
+function cancelPriceFetch() {
+  if (window._priceFetchController) {
+    window._priceFetchController.abort();
+    toast('A cancelar price fetch…', 'info');
+  }
+}
+
+async function clearPriceCacheUI() {
+  const stats = await priceOracle.cacheStats();
+  if (stats.total === 0) {
+    toast('Cache de preços já vazia', 'info');
+    return;
+  }
+  if (!confirm(`Apagar ${stats.total} preços em cache (${stats.prices} preços + ${stats.rates} taxas EUR)? Vais precisar de re-buscar tudo.`)) return;
+  const cleared = await priceOracle.clearCache();
+  toast(`✓ ${cleared} entradas de cache apagadas`, 'success');
+}
+
+window.fetchPricesForActiveWallet = fetchPricesForActiveWallet;
+window.cancelPriceFetch = cancelPriceFetch;
+window.clearPriceCacheUI = clearPriceCacheUI;
+
 async function startIndexerForActiveWallet() {
   const w = activeWallet();
   if (!w) {
@@ -7689,6 +8161,11 @@ function renderHistory(w) {
         <div class="stat-sub">${walletEvents.filter(e => e.protocol).length} eventos · ${walletEvents.filter(e => !e.protocol).length} sem label</div>
       </div>
       <div class="stat">
+        <div class="stat-label">Eventos com Preço EUR</div>
+        <div class="stat-value sv-green">${walletEvents.filter(e => typeof e.priceEUR === 'number').length}</div>
+        <div class="stat-sub">${walletEvents.filter(e => e.priceNote === 'no_price_data').length} sem preço · ${walletEvents.filter(e => e.priceNote === 'nft_excluded').length} NFTs</div>
+      </div>
+      <div class="stat">
         <div class="stat-label">Última Indexação</div>
         <div class="stat-value" style="font-size:1.05rem;color:var(--text)">${meta.lastIndexedAt ? new Date(meta.lastIndexedAt).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : 'Nunca'}</div>
         <div class="stat-sub">${meta.totalCalls ? `${meta.totalCalls} chamadas RPC` : ''}</div>
@@ -7746,6 +8223,53 @@ function renderHistory(w) {
             <strong>Bitcoin</strong>: address único ou xpub/ypub/zpub completo (via Mempool.space, sem API key).
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Price Oracle (Sprint 7) -->
+    <div class="panel" style="margin-bottom:1.3rem">
+      <div class="panel-head">
+        <span class="panel-title">💶 Price Oracle</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">DefiLlama + ECB · cache permanente</span>
+      </div>
+      <div class="panel-body">
+        ${(() => {
+          const eventsNeedingPrice = walletEvents.filter(e =>
+            e.direction !== 'self' && e.amount > 0 &&
+            !(typeof e.priceEUR === 'number') &&
+            e.category !== 'erc721' && e.category !== 'erc1155'
+          ).length;
+          const isFetching = window._priceFetchRunning === true;
+          return `
+            <div id="priceFetchProgress" style="margin-bottom:1rem;display:${isFetching ? 'block' : 'none'}">
+              <div style="background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:1rem">
+                <div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:0.5rem">
+                  <span id="priceFetchPhase" style="color:var(--gold)">A buscar preços…</span>
+                </div>
+                <div style="background:var(--bg);height:6px;border-radius:3px;overflow:hidden">
+                  <div id="priceFetchBar" style="background:linear-gradient(90deg,var(--green),#7ee08a);height:100%;width:0%;transition:width 0.4s"></div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center">
+              <button class="btn btn-gold btn-sm" onclick="fetchPricesForActiveWallet()" ${(walletEvents.length === 0 || eventsNeedingPrice === 0 || isFetching) ? 'disabled' : ''}>
+                ${isFetching ? '⏳ A buscar…' : (eventsNeedingPrice > 0 ? `💶 Buscar Preços (${eventsNeedingPrice} eventos)` : '✓ Preços completos')}
+              </button>
+              ${isFetching ? `<button class="btn btn-outline btn-sm" onclick="cancelPriceFetch()">✕ Cancelar</button>` : ''}
+              <button class="btn btn-outline btn-sm" onclick="clearPriceCacheUI()">🗑 Limpar Cache</button>
+              <span style="font-size:0.75rem;color:var(--text-muted);margin-left:auto">
+                ${walletEvents.filter(e => typeof e.priceEUR === 'number').length} / ${walletEvents.length} com preço
+              </span>
+            </div>
+            <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
+              <span>ℹ</span>
+              <div>
+                Preços históricos via <strong>DefiLlama</strong> (USD) + <strong>ECB</strong> (USD→EUR), granularidade diária.<br>
+                Cache permanente em IndexedDB — preços históricos são imutáveis. <strong>NFTs excluídos</strong> (Art. 10 nº 18 — não são criptoativos fiscalmente).
+              </div>
+            </div>
+          `;
+        })()}
       </div>
     </div>
 
@@ -7818,6 +8342,7 @@ function renderHistory(w) {
                   <th>Tipo</th>
                   <th>Asset</th>
                   <th style="text-align:right">Quantidade</th>
+                  <th style="text-align:right">Valor EUR</th>
                   <th>Direcção</th>
                   <th>Counterparty</th>
                   <th>Tx</th>
@@ -7831,6 +8356,13 @@ function renderHistory(w) {
                     <td>${typeBadge(e.type)}</td>
                     <td style="font-family:var(--mono);font-weight:600;font-size:0.78rem">${e.asset || '?'}</td>
                     <td style="text-align:right;font-family:var(--num);font-size:0.78rem">${fmtAmount(e)}</td>
+                    <td style="text-align:right;font-family:var(--num);font-size:0.78rem;color:${typeof e.priceEUR === 'number' ? 'var(--gold)' : 'var(--text-muted)'}">
+                      ${typeof e.priceEUR === 'number'
+                        ? '€' + (e.amount * e.priceEUR).toLocaleString('pt-PT', {minimumFractionDigits:2, maximumFractionDigits:2})
+                        : (e.priceNote === 'nft_excluded' ? '<span title="NFT — excluído Art. 10 nº 18" style="font-size:0.7rem">NFT</span>'
+                          : e.priceNote === 'no_price_data' ? '<span title="Sem dados de preço">—</span>'
+                          : '<span title="Por buscar">·</span>')}
+                    </td>
                     <td style="font-size:0.78rem;color:${dirColor(e.direction)};font-weight:600">${dirIcon(e.direction)} ${e.direction}</td>
                     <td style="font-size:0.72rem">
                       ${e.counterparty?.labeled
