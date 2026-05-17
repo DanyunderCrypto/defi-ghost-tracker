@@ -11748,13 +11748,53 @@ function deleteCard(id) {
 // WALLET CRUD
 // ══════════════════════════════════════════════════════════
 function saveWallet() {
-  const addr = document.getElementById('w_addr')?.value?.trim();
-  if (!addr?.startsWith('0x')||addr.length!==42) { toast('Endereço EVM inválido','warn'); return; }
-  const w = { id:genId(), name:document.getElementById('w_name')?.value?.trim()||'Wallet', addr, sol:document.getElementById('w_sol')?.value?.trim()||'', apiKey:document.getElementById('w_apikey')?.value?.trim()||'', alchemyKey:document.getElementById('w_alchemy_key')?.value?.trim()||'', tgToken:document.getElementById('w_tg_token')?.value?.trim()||'', tgChat:document.getElementById('w_tg_chat')?.value?.trim()||'' };
+  const addr = document.getElementById('w_addr')?.value?.trim() || '';
+  const btc = document.getElementById('w_btc')?.value?.trim() || '';
+  const sol = document.getElementById('w_sol')?.value?.trim() || '';
+
+  // Validate EVM if provided
+  if (addr && (!addr.startsWith('0x') || addr.length !== 42)) {
+    toast('Endereço EVM inválido (deve começar com 0x e ter 42 caracteres)', 'warn');
+    return;
+  }
+
+  // Validate Bitcoin if provided
+  let bitcoinAddress = '', bitcoinXpub = '';
+  if (btc) {
+    if (mempoolAdapter.isXpub(btc)) {
+      bitcoinXpub = btc;
+    } else if (mempoolAdapter.isBtcAddress(btc)) {
+      bitcoinAddress = btc;
+    } else {
+      toast('Bitcoin inválido — deve ser endereço (bc1q.../1.../3...) ou xpub/ypub/zpub', 'warn');
+      return;
+    }
+  }
+
+  // At least one address required
+  if (!addr && !btc && !sol) {
+    toast('Adiciona pelo menos um endereço (EVM, Bitcoin ou Solana)', 'warn');
+    return;
+  }
+
+  const w = {
+    id: genId(),
+    name: document.getElementById('w_name')?.value?.trim() || 'Wallet',
+    addr,
+    sol,
+    bitcoinAddress,
+    bitcoinXpub,
+    apiKey: document.getElementById('w_apikey')?.value?.trim() || '',
+    alchemyKey: document.getElementById('w_alchemy_key')?.value?.trim() || '',
+    tgToken: document.getElementById('w_tg_token')?.value?.trim() || '',
+    tgChat: document.getElementById('w_tg_chat')?.value?.trim() || '',
+  };
   state.wallets.push(w);
-  if (!state.activeWId) state.activeWId=w.id;
-  saveState(); closeModal('modalWallet');
-  toast('Wallet adicionada ✓','success'); render();
+  if (!state.activeWId) state.activeWId = w.id;
+  saveState();
+  closeModal('modalWallet');
+  toast('Wallet adicionada ✓', 'success');
+  render();
 }
 
 function editWallet(id) {
