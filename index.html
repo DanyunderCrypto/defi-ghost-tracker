@@ -7548,11 +7548,25 @@ function cancelIndexer() {
 function clearWalletEvents() {
   const w = activeWallet();
   if (!w) return;
+  // Collect all wallet identifiers (EVM + Bitcoin)
   const wAddr = (w.addr || w.evm || '').toLowerCase();
-  const count = (state.events || []).filter(e => e.walletAddress === wAddr).length;
-  if (count === 0) return;
+  const btcAddr = (w.bitcoinXpub || w.bitcoinAddress || '').toLowerCase();
+  const ids = [wAddr, btcAddr].filter(Boolean);
+  if (ids.length === 0) {
+    toast('Wallet sem endereços configurados', 'warn');
+    return;
+  }
+
+  const matchesWallet = (e) => ids.includes((e.walletAddress || '').toLowerCase());
+  const count = (state.events || []).filter(matchesWallet).length;
+
+  if (count === 0) {
+    toast('Sem eventos indexados para apagar', 'info');
+    return;
+  }
   if (!confirm(`Apagar ${count} eventos indexados para esta wallet? Vai precisar de re-indexar depois.`)) return;
-  state.events = (state.events || []).filter(e => e.walletAddress !== wAddr);
+
+  state.events = (state.events || []).filter(e => !matchesWallet(e));
   if (state.indexerMeta && state.indexerMeta[w.id]) delete state.indexerMeta[w.id];
   saveState();
   toast(`✓ ${count} eventos apagados`, 'success');
