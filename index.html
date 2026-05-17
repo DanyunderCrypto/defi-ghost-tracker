@@ -2362,6 +2362,15 @@ body.stealth-mode .stealth-badge {
       <div class="form-group form-full"><label class="form-label">Endereço EVM (AAVE/Morpho/etc.) *</label><input class="form-input" id="w_addr" placeholder="0x..."><span class="form-note">Usado para buscar posições on-chain automaticamente</span></div>
       <div class="form-group form-full"><label class="form-label">Endereço Solana (Kamino/Jupiter)</label><input class="form-input" id="w_sol" placeholder="...Solana public key..."></div>
       <div class="form-group form-full">
+        <label class="form-label">Bitcoin — Endereço <strong>OU</strong> xpub/ypub/zpub <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+        <input class="form-input" id="w_btc" placeholder="bc1q... ou xpub...">
+        <span class="form-note">
+          <strong>Address:</strong> 1 só endereço (legacy 1..., P2SH 3..., bech32 bc1...).
+          <strong>xpub/zpub:</strong> deriva automaticamente milhares de endereços (BIP44/49/84) — recomendado para carteiras de hardware.
+          Indexação via Mempool.space (sem API key).
+        </span>
+      </div>
+      <div class="form-group form-full">
         <label class="form-label">Alchemy API Key <span style="color:var(--green)">(Recomendado — funciona em todas as chains)</span></label>
         <input class="form-input" id="w_alchemy_key" placeholder="Cole a tua API key do Alchemy">
         <span class="form-note">Grátis em alchemy.com → Create App → escolhe a chain → copia a API Key. Funciona para Base, ETH, Arbitrum, Linea, etc.</span>
@@ -4088,6 +4097,344 @@ window.aurumLookupAddress = lookupAddress;
 window.aurumEnrichEvent = enrichEvent;
 
 
+
+// ─────────────────────────────────────────────────
+// Sprint 6: BITCOIN SUPPORT
+//
+// Architecture:
+//   MempoolAdapter   — wraps Mempool.space REST API (no key, ~10 req/s)
+//   BitcoinIndexer   — handles address OR xpub/ypub/zpub
+//                      Normalizes BTC txs to UniversalEvent shape
+//                      Compatible with renderHistory + future tax engine
+//
+// Privacy: Mempool.space sees the wallet addresses queried.
+// Same trade-off as Alchemy for EVM. Self-hosted Mempool optional later.
+//
+// Tax considerations:
+//   - Every BTC tx is just a transfer (no smart contracts)
+//   - Self-transfers (consolidation, change UTXOs) → direction='self', non-taxable
+//   - Receive from outside → acquisition (basis = EUR at receipt)
+//   - Send to outside → disposal (FIFO, <365d or ≥365d)
+//   - Pre-2023 receives → marked exempt_pre_2023 (Sprint 8)
+// ─────────────────────────────────────────────────
+
+const MEMPOOL_BASE = 'https://mempool.space/api';
+const BITCOIN_RATE_LIMIT_DELAY_MS = 200;  // 5 req/s to be safe
+
+const mempoolAdapter = (() => {
+  let _lastCallAt = 0;
+
+  function _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  async function _throttle() {
+    const since = Date.now() - _lastCallAt;
+    if (since < BITCOIN_RATE_LIMIT_DELAY_MS) {
+      await _delay(BITCOIN_RATE_LIMIT_DELAY_MS - since);
+    }
+    _lastCallAt = Date.now();
+  }
+
+  async function _get(url, attempt = 0) {
+    await _throttle();
+    try {
+      const res = await safeFetch(url, { timeout: 30000 }, 'mempool');
+      if (!res.ok) {
+        if (res.status === 404) return null;  // No txs / address not found
+        if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+          await _delay(Math.pow(2, attempt) * 1000);
+          return _get(url, attempt + 1);
+        }
+        throw new Error(`Mempool HTTP ${res.status}`);
+      }
+      return await res.json();
+    } catch (err) {
+      if (attempt < 3 && !err.message.includes('AbortError')) {
+        await _delay(Math.pow(2, attempt) * 1000);
+        return _get(url, attempt + 1);
+      }
+      throw err;
+    }
+  }
+
+  // Detect xpub-like input
+  function isXpub(input) {
+    if (!input || typeof input !== 'string') return false;
+    const s = input.trim();
+    return /^(xpub|ypub|zpub|Xpub|Ypub|Zpub)[1-9A-HJ-NP-Za-km-z]{100,120}$/.test(s);
+  }
+
+  // Detect plain BTC address
+  function isBtcAddress(input) {
+    if (!input || typeof input !== 'string') return false;
+    const s = input.trim();
+    // Legacy P2PKH (1...), P2SH (3...), Bech32 (bc1q...), Bech32m (bc1p...)
+    return /^(bc1[a-z0-9]{25,89}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(s);
+  }
+
+  // Fetch transactions for a single address (paginated, up to 1500 txs)
+  async function getAddressTransactions(address) {
+    const txs = [];
+    let lastSeenTxid = null;
+    const maxPages = 30;  // 30 pages × 50 tx = 1500 cap
+
+    for (let p = 0; p < maxPages; p++) {
+      const url = lastSeenTxid
+        ? `${MEMPOOL_BASE}/address/${address}/txs/chain/${lastSeenTxid}`
+        : `${MEMPOOL_BASE}/address/${address}/txs`;
+      const batch = await _get(url);
+      if (!batch || !Array.isArray(batch) || batch.length === 0) break;
+      txs.push(...batch);
+      if (batch.length < 25) break;  // Mempool returns 25 per page typically
+      lastSeenTxid = batch[batch.length - 1].txid;
+    }
+    return txs;
+  }
+
+  // Fetch transactions for an xpub/ypub/zpub
+  // Mempool.space derives all addresses internally
+  async function getXpubTransactions(xpub) {
+    const txs = [];
+    let lastSeenTxid = null;
+    const maxPages = 30;
+    for (let p = 0; p < maxPages; p++) {
+      const url = lastSeenTxid
+        ? `${MEMPOOL_BASE}/xpub/${xpub}/txs/chain/${lastSeenTxid}`
+        : `${MEMPOOL_BASE}/xpub/${xpub}/txs`;
+      const batch = await _get(url);
+      if (!batch || !Array.isArray(batch) || batch.length === 0) break;
+      txs.push(...batch);
+      if (batch.length < 25) break;
+      lastSeenTxid = batch[batch.length - 1].txid;
+    }
+    return txs;
+  }
+
+  // Get list of addresses associated with xpub (for self-transfer detection)
+  async function getXpubAddresses(xpub) {
+    try {
+      const data = await _get(`${MEMPOOL_BASE}/v1/xpub/${xpub}`);
+      if (data?.addresses) return data.addresses;
+    } catch (e) { /* fall back */ }
+    return [];
+  }
+
+  return {
+    isXpub,
+    isBtcAddress,
+    getAddressTransactions,
+    getXpubTransactions,
+    getXpubAddresses,
+  };
+})();
+
+// ─────────────────────────────────────────────────
+// BitcoinIndexer — normalizes Mempool txs → UniversalEvent
+// ─────────────────────────────────────────────────
+const bitcoinIndexer = (() => {
+
+  // Each Mempool tx has vin (inputs) and vout (outputs).
+  // For our wallet, we compute net in/out and synthesize a UniversalEvent.
+  function _normalizeTx(tx, ownedAddrs) {
+    const ownedSet = new Set(ownedAddrs.map(a => a.toLowerCase()));
+    const isOwned = (addr) => addr && ownedSet.has(addr.toLowerCase());
+
+    // Sum inputs that came from US (BTC leaving wallet)
+    let outSats = 0;
+    let outFromOwned = 0;
+    let inputAddrs = new Set();
+    for (const vin of (tx.vin || [])) {
+      const prevout = vin.prevout;
+      if (!prevout) continue;
+      const addr = prevout.scriptpubkey_address || '';
+      inputAddrs.add(addr);
+      if (isOwned(addr)) {
+        outFromOwned += (prevout.value || 0);  // sats spent from our wallet
+      }
+    }
+
+    // Sum outputs going to US (BTC arriving)
+    let inToOwned = 0;
+    let outputAddrs = new Set();
+    let externalOutputAddr = null;
+    let externalOutputValue = 0;
+    for (const vout of (tx.vout || [])) {
+      const addr = vout.scriptpubkey_address || '';
+      outputAddrs.add(addr);
+      if (isOwned(addr)) {
+        inToOwned += (vout.value || 0);
+      } else if (vout.value > externalOutputValue) {
+        externalOutputAddr = addr;
+        externalOutputValue = vout.value;
+      }
+    }
+
+    // Net change for our wallet (negative = send, positive = receive)
+    const netSats = inToOwned - outFromOwned;
+    const isSelfTransfer = outFromOwned > 0 && inToOwned > 0 && externalOutputValue === 0;
+
+    // Determine direction and amount
+    let direction, amountSats, counterpartyAddr;
+    if (isSelfTransfer) {
+      direction = 'self';
+      amountSats = outFromOwned;  // total moved internally
+      counterpartyAddr = '';
+    } else if (netSats < 0) {
+      direction = 'out';
+      // Amount sent externally = total spent − change returned to us − fees
+      amountSats = externalOutputValue || Math.abs(netSats);
+      counterpartyAddr = externalOutputAddr || '';
+    } else if (netSats > 0) {
+      direction = 'in';
+      amountSats = inToOwned;
+      // First non-owned input is the sender
+      counterpartyAddr = [...inputAddrs].find(a => !isOwned(a)) || '';
+    } else {
+      direction = 'unknown';
+      amountSats = 0;
+      counterpartyAddr = '';
+    }
+
+    const amountBTC = amountSats / 1e8;
+    const blockTime = tx.status?.block_time || 0;
+    const date = blockTime ? new Date(blockTime * 1000).toISOString().slice(0, 10) : '';
+
+    return {
+      id: `btc:mainnet:${tx.txid}:${direction}`,
+      chain: 'bitcoin',
+      txHash: tx.txid,
+      blockNumber: tx.status?.block_height || 0,
+      timestamp: blockTime,
+      date,
+      walletAddress: '',  // set by indexer
+      type: direction === 'self' ? 'self_transfer' :
+            direction === 'in'   ? 'receive' :
+            direction === 'out'  ? 'send' : 'unknown',
+      direction,
+      asset: 'BTC',
+      assetContract: '',
+      amount: amountBTC,
+      decimals: 8,
+      counterparty: {
+        address: counterpartyAddr,
+        labeled: '',
+        isContract: false,
+      },
+      category: 'btc_native',
+      fee: (tx.fee || 0) / 1e8,
+      confirmed: !!tx.status?.confirmed,
+    };
+  }
+
+  async function indexWallet(walletInput, opts = {}) {
+    const summary = {
+      walletInput,
+      type: '',
+      events: 0,
+      addresses: 0,
+      errors: [],
+      startedAt: Date.now(),
+      durationMs: 0,
+    };
+
+    opts.onProgress?.({ phase: 'detecting', input: walletInput });
+
+    try {
+      let txs = [];
+      let ownedAddrs = [];
+
+      if (mempoolAdapter.isXpub(walletInput)) {
+        summary.type = 'xpub';
+        opts.onProgress?.({ phase: 'fetching_xpub', input: walletInput });
+        ownedAddrs = await mempoolAdapter.getXpubAddresses(walletInput);
+        // If we can't get derived addresses, fall back to using xpub directly
+        // for txs fetch (Mempool will derive internally)
+        if (ownedAddrs.length === 0) {
+          // Still works — Mempool derives them server-side for /txs endpoint
+        }
+        opts.onProgress?.({ phase: 'fetching_txs', input: walletInput });
+        txs = await mempoolAdapter.getXpubTransactions(walletInput);
+      } else if (mempoolAdapter.isBtcAddress(walletInput)) {
+        summary.type = 'address';
+        ownedAddrs = [walletInput];
+        opts.onProgress?.({ phase: 'fetching_txs', input: walletInput });
+        txs = await mempoolAdapter.getAddressTransactions(walletInput);
+      } else {
+        throw new Error('Invalid Bitcoin input: not an address or xpub/ypub/zpub');
+      }
+
+      summary.addresses = ownedAddrs.length || 1;
+
+      // For each tx, also pull all "owned addresses" from the txs themselves
+      // (handles the case where xpub addresses endpoint failed)
+      if (ownedAddrs.length === 0 && txs.length > 0 && summary.type === 'xpub') {
+        // Heuristic: addresses that appear as both inputs AND outputs in different
+        // transactions are likely owned by us
+        const addrCounts = {};
+        for (const tx of txs) {
+          for (const vin of (tx.vin || [])) {
+            const a = vin.prevout?.scriptpubkey_address;
+            if (a) addrCounts[a] = (addrCounts[a] || 0) + 1;
+          }
+          for (const vout of (tx.vout || [])) {
+            const a = vout.scriptpubkey_address;
+            if (a) addrCounts[a] = (addrCounts[a] || 0) + 1;
+          }
+        }
+        // Take all addresses that appear (Mempool only returns txs containing OUR addresses)
+        ownedAddrs = Object.keys(addrCounts);
+      }
+
+      // Normalize each tx to UniversalEvent
+      const events = [];
+      for (const tx of txs) {
+        const evt = _normalizeTx(tx, ownedAddrs);
+        evt.walletAddress = walletInput.toLowerCase();
+        events.push(evt);
+      }
+
+      // Dedupe by id
+      const seen = new Set();
+      const unique = [];
+      for (const e of events) {
+        if (!seen.has(e.id)) {
+          seen.add(e.id);
+          unique.push(e);
+        }
+      }
+
+      // Persist to state.events (alongside EVM events)
+      state.events = state.events || [];
+      // Remove existing BTC events for this wallet (re-index from scratch)
+      state.events = state.events.filter(e =>
+        !(e.chain === 'bitcoin' && e.walletAddress === walletInput.toLowerCase())
+      );
+      state.events.push(...unique);
+      state.events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      saveState();
+
+      summary.events = unique.length;
+      summary.durationMs = Date.now() - summary.startedAt;
+      opts.onProgress?.({ phase: 'done', summary });
+      errorLogger.info(`BTC indexer: ${summary.events} events in ${(summary.durationMs/1000).toFixed(1)}s`,
+                       { type: summary.type });
+      return summary;
+    } catch (err) {
+      summary.errors.push(err.message);
+      errorLogger.error(`bitcoinIndexer: ${err.message}`);
+      throw err;
+    }
+  }
+
+  return {
+    indexWallet,
+    isXpub: mempoolAdapter.isXpub,
+    isBtcAddress: mempoolAdapter.isBtcAddress,
+  };
+})();
+
+window.aurumBitcoin = bitcoinIndexer;
+window.aurumMempool = mempoolAdapter;
+
+
 // ─────────────────────────────────────────────────
 // UniversalIndexer — orchestrates indexing per wallet
 // ─────────────────────────────────────────────────
@@ -4326,7 +4673,7 @@ async function loadState() {
   // IDB load happens via async/await, but the function blocks the rest of boot.
 
   // ── Schema versioning ──
-  const SCHEMA_VERSION = 5;
+  const SCHEMA_VERSION = 6;
   const MIGRATIONS = {
     1: (s) => { s.imports = s.imports || []; return s; },
     2: (s) => { s.cards = s.cards || []; return s; },
@@ -4344,9 +4691,18 @@ async function loadState() {
       return s;
     },
     5: (s) => {
-      // Sprint 4: Universal Indexer
-      s.events = s.events || [];           // UniversalEvent[]
-      s.indexerMeta = s.indexerMeta || {}; // per-wallet: { lastIndexedAt, lastBlock }
+      s.events = s.events || [];
+      s.indexerMeta = s.indexerMeta || {};
+      return s;
+    },
+    6: (s) => {
+      // Sprint 6: Bitcoin support
+      // Each wallet can now have bitcoinAddress OR bitcoinXpub (xpub/ypub/zpub)
+      s.wallets = (s.wallets || []).map(w => ({
+        ...w,
+        bitcoinAddress: w.bitcoinAddress || '',
+        bitcoinXpub: w.bitcoinXpub || '',
+      }));
       return s;
     },
   };
@@ -7047,6 +7403,8 @@ function renderWallets() {
             <div>
               <div style="font-weight:700;font-size:1rem;margin-bottom:0.3rem">${w.name} ${isActive?'<span class="badge badge-gold" style="vertical-align:middle">Activa</span>':''}</div>
               <div style="font-family:var(--mono);font-size:0.72rem;color:var(--gold);margin-bottom:0.3rem">${w.addr||'—'}</div>
+              ${w.bitcoinXpub ? `<div style="font-family:var(--mono);font-size:0.7rem;color:#F7931A;margin-bottom:0.2rem">₿ ${w.bitcoinXpub.slice(0,10)}…${w.bitcoinXpub.slice(-6)} <span style="opacity:0.6">(xpub)</span></div>` : ''}
+              ${w.bitcoinAddress ? `<div style="font-family:var(--mono);font-size:0.7rem;color:#F7931A;margin-bottom:0.2rem">₿ ${w.bitcoinAddress.slice(0,10)}…${w.bitcoinAddress.slice(-6)}</div>` : ''}
               ${w.sol?`<div style="font-family:var(--mono);font-size:0.7rem;color:var(--blue)">SOL: ${w.sol.slice(0,8)}...${w.sol.slice(-4)}</div>`:''}
               <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap">
                 <span class="badge ${w.alchemyKey?'badge-green':'badge-muted'}">${w.alchemyKey?'✓ Alchemy Key':'Sem Alchemy Key'}</span>
@@ -7079,21 +7437,22 @@ async function startIndexerForActiveWallet() {
     toast('Sem wallet activa', 'warn');
     return;
   }
-  const walletAddr = w.addr || w.evm || '';
-  if (!walletAddr) {
-    toast('Wallet sem endereço EVM', 'warn');
-    return;
-  }
-  if (!walletAddr.startsWith('0x') || walletAddr.length !== 42) {
-    toast('Endereço EVM inválido (deve começar com 0x e ter 42 caracteres)', 'warn');
-    return;
-  }
-  if (!w.alchemyKey) {
-    toast('Configura Alchemy API Key em Config primeiro', 'warn');
-    return;
-  }
   if (window._indexerRunning) {
     toast('Indexer já está a correr', 'info');
+    return;
+  }
+
+  const walletAddr = w.addr || w.evm || '';
+  const hasEVM = walletAddr && walletAddr.startsWith('0x') && walletAddr.length === 42;
+  const btcInput = w.bitcoinXpub || w.bitcoinAddress || '';
+  const hasBTC = btcInput && (mempoolAdapter.isXpub(btcInput) || mempoolAdapter.isBtcAddress(btcInput));
+
+  if (!hasEVM && !hasBTC) {
+    toast('Wallet sem endereço EVM nem Bitcoin configurado', 'warn');
+    return;
+  }
+  if (hasEVM && !w.alchemyKey) {
+    toast('Configura Alchemy API Key para indexar EVM', 'warn');
     return;
   }
 
@@ -7101,40 +7460,67 @@ async function startIndexerForActiveWallet() {
   window._indexerController = new AbortController();
   render();
 
+  let evmSummary = null;
+  let btcSummary = null;
+
   try {
-    const summary = await universalIndexer.indexWallet(walletAddr, w.alchemyKey, {
-      signal: window._indexerController.signal,
-      onProgress: (p) => {
-        const phaseEl = document.getElementById('indexerPhase');
-        const countEl = document.getElementById('indexerCount');
-        const barEl = document.getElementById('indexerBar');
-        if (p.phase === 'fetching' && phaseEl) {
-          phaseEl.textContent = `A indexar ${p.chain.toUpperCase()}… (${p.chainIdx}/${p.chainsTotal})`;
-          if (countEl) countEl.textContent = `${p.eventsCount} eventos`;
-          if (barEl) barEl.style.width = `${(p.chainIdx / p.chainsTotal) * 100}%`;
-        } else if (p.phase === 'done' && phaseEl) {
-          phaseEl.textContent = `✓ Concluído (${p.summary.totalEvents} eventos)`;
-          if (barEl) barEl.style.width = '100%';
-        }
-      },
-    });
+    // ── EVM indexing (if applicable) ──
+    if (hasEVM && w.alchemyKey) {
+      evmSummary = await universalIndexer.indexWallet(walletAddr, w.alchemyKey, {
+        signal: window._indexerController.signal,
+        onProgress: (p) => {
+          const phaseEl = document.getElementById('indexerPhase');
+          const countEl = document.getElementById('indexerCount');
+          const barEl = document.getElementById('indexerBar');
+          if (p.phase === 'fetching' && phaseEl) {
+            phaseEl.textContent = `A indexar ${p.chain.toUpperCase()}… (${p.chainIdx}/${p.chainsTotal})`;
+            if (countEl) countEl.textContent = `${p.eventsCount} eventos`;
+            if (barEl) barEl.style.width = `${(p.chainIdx / p.chainsTotal) * 100 * (hasBTC ? 0.8 : 1)}%`;
+          }
+        },
+      });
+    }
+
+    // ── Bitcoin indexing (if applicable) ──
+    if (hasBTC) {
+      const phaseEl = document.getElementById('indexerPhase');
+      const countEl = document.getElementById('indexerCount');
+      const barEl = document.getElementById('indexerBar');
+      if (phaseEl) phaseEl.textContent = `A indexar BITCOIN…`;
+      if (barEl && hasEVM) barEl.style.width = '85%';
+      else if (barEl) barEl.style.width = '50%';
+
+      btcSummary = await bitcoinIndexer.indexWallet(btcInput, {
+        onProgress: (p) => {
+          if (countEl && btcSummary) countEl.textContent = `${btcSummary.events} BTC events`;
+          if (phaseEl) phaseEl.textContent = `BTC: ${p.phase}…`;
+        },
+      });
+      if (barEl) barEl.style.width = '100%';
+    }
 
     // Persist meta
     state.indexerMeta = state.indexerMeta || {};
     state.indexerMeta[w.id] = {
       lastIndexedAt: Date.now(),
-      totalEvents: summary.totalEvents,
-      totalCalls: summary.totalCalls,
-      durationMs: summary.durationMs,
-      chains: summary.chains,
+      totalEvents: (evmSummary?.totalEvents || 0) + (btcSummary?.events || 0),
+      totalCalls: evmSummary?.totalCalls || 0,
+      durationMs: (evmSummary?.durationMs || 0) + (btcSummary?.durationMs || 0),
+      chains: evmSummary?.chains || {},
+      bitcoinType: btcSummary?.type,
+      bitcoinEvents: btcSummary?.events || 0,
     };
     saveState();
 
-    const errors = summary.errors.length;
+    // Build summary toast
+    const parts = [];
+    if (evmSummary) parts.push(`${evmSummary.totalEvents} EVM events`);
+    if (btcSummary) parts.push(`${btcSummary.events} BTC events`);
+    const errors = (evmSummary?.errors?.length || 0) + (btcSummary?.errors?.length || 0);
     if (errors > 0) {
-      toast(`Indexer: ${summary.totalEvents} eventos · ${errors} chain(s) com erros`, 'warn');
+      toast(`Indexer: ${parts.join(' · ')} · ${errors} erro(s)`, 'warn');
     } else {
-      toast(`✓ Indexer: ${summary.totalEvents} eventos em ${(summary.durationMs/1000).toFixed(1)}s`, 'success');
+      toast(`✓ Indexer: ${parts.join(' · ')}`, 'success');
     }
   } catch (err) {
     errorLogger.error('startIndexer: ' + err.message);
@@ -7176,7 +7562,11 @@ function renderHistory(w) {
   state.indexerMeta = state.indexerMeta || {};
 
   const wAddr = (w.addr || w.evm || '').toLowerCase();
-  const walletEvents = state.events.filter(e => e.walletAddress === wAddr);
+  const btcAddr = (w.bitcoinXpub || w.bitcoinAddress || '').toLowerCase();
+  const walletEvents = state.events.filter(e =>
+    (wAddr && e.walletAddress === wAddr) ||
+    (btcAddr && e.walletAddress === btcAddr)
+  );
   const meta = state.indexerMeta[w.id] || {};
 
   // Stats
@@ -7251,7 +7641,7 @@ function renderHistory(w) {
     };
     return `<span style="background:${colors[t]||'#888'}22;color:${colors[t]||'#888'};padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:600;letter-spacing:0.05em">${labels[t]||t}</span>`;
   };
-  const chainColor = (c) => ({ eth: '#627EEA', base: '#0052FF', arbitrum: '#28A0F0', optimism: '#FF0420' }[c] || '#888');
+  const chainColor = (c) => ({ eth: '#627EEA', base: '#0052FF', arbitrum: '#28A0F0', optimism: '#FF0420', bitcoin: '#F7931A' }[c] || '#888');
 
   // Check if indexing is running
   const isIndexing = window._indexerRunning === true;
@@ -7292,17 +7682,24 @@ function renderHistory(w) {
         <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Alchemy · ${universalIndexer.SUPPORTED_CHAINS.length} chains</span>
       </div>
       <div class="panel-body">
-        ${!w.alchemyKey ? `
-          <div class="alert alert-warn" style="margin-bottom:1rem">
-            <span>⚠</span>
-            <div>Configura a tua Alchemy API Key em <strong>Config → Conexões</strong> para activar o indexer.</div>
-          </div>
-        ` : !(w.addr || w.evm) ? `
-          <div class="alert alert-warn" style="margin-bottom:1rem">
-            <span>⚠</span>
-            <div>Esta wallet não tem endereço EVM. Edita em <strong>Wallets</strong> para adicionar.</div>
-          </div>
-        ` : ''}
+        ${(() => {
+          const hasEVMConf = (w.addr || w.evm) && w.alchemyKey;
+          const hasBTCConf = w.bitcoinAddress || w.bitcoinXpub;
+          if (!hasEVMConf && !hasBTCConf) {
+            return `<div class="alert alert-warn" style="margin-bottom:1rem">
+              <span>⚠</span>
+              <div>Esta wallet não tem nada configurado para indexar.
+              Adiciona <strong>endereço EVM + Alchemy Key</strong> e/ou <strong>endereço/xpub Bitcoin</strong> em <em>Wallets → Editar</em>.</div>
+            </div>`;
+          }
+          if (!hasEVMConf && (w.addr || w.evm) && !w.alchemyKey) {
+            return `<div class="alert alert-warn" style="margin-bottom:1rem">
+              <span>⚠</span>
+              <div>EVM detectado mas <strong>sem Alchemy API Key</strong>. ${hasBTCConf ? 'Bitcoin será indexado, mas EVM não.' : 'Configura Alchemy para activar o indexer.'}</div>
+            </div>`;
+          }
+          return '';
+        })()}
         <div id="indexerProgress" style="margin-bottom:1rem;display:${isIndexing ? 'block' : 'none'}">
           <div style="background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:1rem">
             <div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:0.5rem">
@@ -7315,7 +7712,7 @@ function renderHistory(w) {
           </div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
-          <button class="btn btn-gold btn-sm" onclick="startIndexerForActiveWallet()" ${!w.alchemyKey || !(w.addr || w.evm) || isIndexing ? 'disabled' : ''}>
+          <button class="btn btn-gold btn-sm" onclick="startIndexerForActiveWallet()" ${(() => { const hasEVM = (w.addr||w.evm) && w.alchemyKey; const hasBTC = w.bitcoinAddress||w.bitcoinXpub; return (!hasEVM && !hasBTC) || isIndexing ? 'disabled' : ''; })()}>
             ${isIndexing ? '⏳ A indexar…' : (totalEvents > 0 ? '↻ Re-indexar' : '⚡ Indexar Agora')}
           </button>
           ${isIndexing ? `<button class="btn btn-outline btn-sm" onclick="cancelIndexer()">✕ Cancelar</button>` : ''}
@@ -7325,7 +7722,8 @@ function renderHistory(w) {
           <span>ℹ</span>
           <div>
             O indexer descarrega <strong>todo o histórico on-chain</strong> da tua wallet desde o primeiro bloco — necessário para FIFO correcto e regime transitório &lt;2023 (Art. 220 OE/2023).<br>
-            Chains: ${universalIndexer.SUPPORTED_CHAINS.join(', ')}. Mais chains nas próximas updates.
+            <strong>EVM</strong>: ${universalIndexer.SUPPORTED_CHAINS.join(', ')} (via Alchemy).
+            <strong>Bitcoin</strong>: address único ou xpub/ypub/zpub completo (via Mempool.space, sem API key).
           </div>
         </div>
       </div>
@@ -11360,29 +11758,50 @@ function saveWallet() {
 }
 
 function editWallet(id) {
-  const w = state.wallets.find(x=>x.id===id); if (!w) return;
-  document.getElementById('w_name').value=w.name||'';
-  document.getElementById('w_addr').value=w.addr||'';
-  document.getElementById('w_sol').value=w.sol||'';
-  document.getElementById('w_apikey').value=w.apiKey||'';
-  document.getElementById('w_tg_token').value=w.tgToken||'';
-  document.getElementById('w_tg_chat').value=w.tgChat||'';
-  document.getElementById('modalWalletTitle').textContent='Editar Wallet';
-  // Override save to update instead of add
+  const w = state.wallets.find(x => x.id === id); if (!w) return;
+  document.getElementById('w_name').value = w.name || '';
+  document.getElementById('w_addr').value = w.addr || '';
+  document.getElementById('w_sol').value = w.sol || '';
+  // Bitcoin field: show xpub if present, else address
+  const btcEl = document.getElementById('w_btc');
+  if (btcEl) btcEl.value = w.bitcoinXpub || w.bitcoinAddress || '';
+  document.getElementById('w_apikey').value = w.apiKey || '';
+  const alchemyEl = document.getElementById('w_alchemy_key');
+  if (alchemyEl) alchemyEl.value = w.alchemyKey || '';
+  document.getElementById('w_tg_token').value = w.tgToken || '';
+  document.getElementById('w_tg_chat').value = w.tgChat || '';
+  document.getElementById('modalWalletTitle').textContent = 'Editar Wallet';
   window._editWalletId = id;
   openModal('modalWallet');
-  // Patch save button
-  const origSave = window.saveWallet;
-  document.querySelector('#modalWallet .modal-foot .btn-gold').onclick = ()=>{
-    const w2=state.wallets.find(x=>x.id===id); if(!w2) return;
-    w2.name=document.getElementById('w_name').value.trim()||w2.name;
-    w2.addr=document.getElementById('w_addr').value.trim()||w2.addr;
-    w2.sol=document.getElementById('w_sol').value.trim()||'';
-    w2.apiKey=document.getElementById('w_apikey').value.trim()||'';
-    w2.tgToken=document.getElementById('w_tg_token').value.trim()||'';
-    w2.tgChat=document.getElementById('w_tg_chat').value.trim()||'';
-    saveState(); closeModal('modalWallet');
-    toast('Wallet actualizada ✓','success'); render();
+  // Patch save button to update instead of add
+  document.querySelector('#modalWallet .modal-foot .btn-gold').onclick = () => {
+    const w2 = state.wallets.find(x => x.id === id); if (!w2) return;
+    w2.name = document.getElementById('w_name').value.trim() || w2.name;
+    w2.addr = document.getElementById('w_addr').value.trim() || '';
+    w2.sol  = document.getElementById('w_sol').value.trim() || '';
+
+    // Bitcoin handling on edit
+    const btcInput = document.getElementById('w_btc')?.value?.trim() || '';
+    w2.bitcoinAddress = '';
+    w2.bitcoinXpub = '';
+    if (btcInput) {
+      if (mempoolAdapter.isXpub(btcInput)) {
+        w2.bitcoinXpub = btcInput;
+      } else if (mempoolAdapter.isBtcAddress(btcInput)) {
+        w2.bitcoinAddress = btcInput;
+      } else {
+        toast('Bitcoin inválido — não vai ser guardado', 'warn');
+      }
+    }
+
+    w2.apiKey = document.getElementById('w_apikey').value.trim() || '';
+    w2.alchemyKey = document.getElementById('w_alchemy_key')?.value?.trim() || '';
+    w2.tgToken = document.getElementById('w_tg_token').value.trim() || '';
+    w2.tgChat = document.getElementById('w_tg_chat').value.trim() || '';
+    saveState();
+    closeModal('modalWallet');
+    toast('Wallet actualizada ✓', 'success');
+    render();
   };
 }
 
