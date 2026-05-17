@@ -364,3 +364,12 @@ module.exports.detectIssuerUniversal = detectIssuerUniversal;
 module.exports.parseRowsUniversal = parseRowsUniversal;
 module.exports._parseDateFlexible = _parseDateFlexible;
 module.exports._parseAmountWithCurrency = _parseAmountWithCurrency;
+
+
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 4 — DOMAIN: CLASSIFIER (pure, testable)                        ║
+// ║  Tax categorization per the Lei 24-D/2022 / Art. 10º CIRS               ║
+// ║  Synced to: aurum-tests/src/classifier.js                               ║
+// ║  Test invariants documented in tests/integration.test.js                ║
+// ╚══════════════════════════════════════════════════════════════════════════╝

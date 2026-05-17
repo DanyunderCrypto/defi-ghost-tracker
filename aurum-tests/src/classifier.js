@@ -367,6 +367,11 @@ module.exports.normalizeTxRow = normalizeTxRow;
 
 // ═══════════════════════════════════════════════════════════
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 5 — IMPORT FLOW: PREVIEW & CONFIRM                             ║
+// ║  Tax-aware UI for confirming imports (DOM-dependent)                    ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
 // Auto-added exports
 module.exports.classifyTransaction = classifyTransaction;
 module.exports.classifyTransactionBatch = classifyTransactionBatch;
