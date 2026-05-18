@@ -6526,6 +6526,369 @@ function getSnapshotDelta24h(currentNet) {
 // ║  SECTION 7 — UI: RENDERING (tabs, panels, cards, tables)                ║
 // ║  All render* functions emit HTML strings for display                    ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
+// ════════════════════════════════════════════════════════════════════
+// Sprint 8.3: Dashboard fiscal hero + Tax Loss Harvest + Portfolio charts
+// ════════════════════════════════════════════════════════════════════
+
+// Compute FIFO state once (cached per render) for use across dashboard widgets
+function _getFifoStateFor(w) {
+  if (!w || !window.aurumFifoEngine) return null;
+  const cacheKey = '_fifoCache_' + w.id;
+  // Tiny cache: bust if state.events count changed (simple heuristic)
+  const events = (state.events || []).filter(e => e.walletId === w.id && typeof e.priceEUR === 'number');
+  const sigKey = events.length + '_' + (events[events.length-1]?.timestamp || 0);
+  if (window[cacheKey] && window[cacheKey]._sig === sigKey) return window[cacheKey];
+  if (events.length === 0) return null;
+  try {
+    const result = window.aurumFifoEngine.process(events, { walletId: w.id });
+    result._sig = sigKey;
+    window[cacheKey] = result;
+    return result;
+  } catch (err) {
+    errorLogger.warn('fifoEngine in dashboard: ' + err.message);
+    return null;
+  }
+}
+
+// ── Fiscal hero panel: KPIs no topo do dashboard ──
+function renderDashboardFiscalHero(w) {
+  const fifoState = _getFifoStateFor(w);
+  if (!fifoState) {
+    return `
+      <div class="panel" style="margin-bottom:1.5rem;border-color:var(--gold);background:linear-gradient(180deg,rgba(212,175,122,0.05),transparent)">
+        <div class="panel-body" style="display:flex;align-items:center;gap:1rem;padding:1rem">
+          <span style="font-size:1.5rem">🧮</span>
+          <div style="flex:1">
+            <div style="font-weight:600;color:var(--text);margin-bottom:0.2rem">Painel Fiscal aguarda dados</div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">Indexa transactions on-chain e corre o Price Oracle para activar o painel fiscal.</div>
+          </div>
+          <button class="btn btn-gold btn-sm" onclick="showTab('history')">→ Ir ao Histórico</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const currentYear = new Date().getFullYear();
+  const yr = fifoState.summary.byYear[currentYear] || {
+    anexoG:  { qty:0, proceeds:0, basis:0, gain:0, count:0 },
+    anexoG1: { qty:0, proceeds:0, basis:0, gain:0, count:0 },
+    anexoE:  { totalEUR:0, byKind:{}, count:0 },
+    taxEstimateEUR: 0,
+  };
+
+  const approaching = window.aurumFifoEngine.lotsApproachingExempt(fifoState.lots, 60);
+  const approachingValue = approaching.reduce((s, l) => s + l.qtyRemaining * l.basisEURPerUnit, 0);
+
+  const gainColor = yr.anexoG.gain > 0 ? 'sv-amber' : yr.anexoG.gain < 0 ? 'sv-red' : '';
+  const taxColor = yr.taxEstimateEUR > 0 ? 'sv-red' : 'sv-green';
+
+  return `
+    <div class="fiscal-hero" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0.85rem;margin-bottom:1.5rem;padding:1rem;background:linear-gradient(135deg,rgba(212,175,122,0.06),rgba(212,175,122,0.01));border:1px solid rgba(212,175,122,0.25);border-radius:var(--radius)">
+
+      <div style="display:flex;flex-direction:column;gap:0.3rem">
+        <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted)">Imposto estimado · ${currentYear}</div>
+        <div class="${taxColor}" style="font-family:var(--mono);font-size:1.7rem;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">€${fmt(yr.taxEstimateEUR)}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted)">28% sobre Anexo G positivo</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0.3rem">
+        <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted)">Mais-valias YTD</div>
+        <div class="${gainColor}" style="font-family:var(--mono);font-size:1.7rem;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">€${fmt(yr.anexoG.gain)}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted)">Anexo G · &lt;365d · ${yr.anexoG.count} alien.</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0.3rem">
+        <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted)">Isento (G1) YTD</div>
+        <div class="sv-green" style="font-family:var(--mono);font-size:1.7rem;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">€${fmt(yr.anexoG1.gain)}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted)">${yr.anexoG1.count} alien. · declarativo</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0.3rem">
+        <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted)">Aproximam isenção</div>
+        <div class="sv-gold" style="font-family:var(--mono);font-size:1.7rem;font-weight:500;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${approaching.length}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted)">lots · €${fmt(approachingValue)} basis</div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:flex-end;grid-column:1 / -1;margin-top:0.3rem">
+        <button class="btn btn-outline btn-sm" onclick="showTab('fiscal')" style="font-size:0.72rem">→ Detalhe fiscal completo</button>
+      </div>
+    </div>
+  `;
+}
+
+// ── Tax Loss Harvest widget — identify lots with unrealized loss ──
+function renderTaxLossHarvest(w) {
+  const fifoState = _getFifoStateFor(w);
+  if (!fifoState) return '';
+
+  // Aggregate open lots by asset (need current price to compute unrealized P&L)
+  // Current price: use latest priceEUR from most recent enriched event for that asset/chain
+  const livePrices = new Map();  // key: asset:chain → {priceEURPerUnit, date}
+  const eventsByAssetChain = new Map();
+  for (const e of (state.events || [])) {
+    if (e.walletId !== w.id) continue;
+    if (typeof e.priceEUR !== 'number' || !e.amount || e.amount === 0) continue;
+    const key = `${e.asset}:${e.chain}`;
+    const cur = livePrices.get(key);
+    const ts = e.timestamp || 0;
+    const ppu = e.priceEUR / e.amount;
+    if (!cur || cur.timestamp < ts) livePrices.set(key, { priceEURPerUnit: ppu, timestamp: ts, date: e.date });
+  }
+
+  // Group open lots by (asset, chain) and aggregate unrealized
+  const openLots = fifoState.lots.filter(l => l.qtyRemaining > 1e-9);
+  const positionMap = new Map();
+  for (const lot of openLots) {
+    const key = `${lot.asset}:${lot.chain}`;
+    if (!positionMap.has(key)) {
+      positionMap.set(key, {
+        asset: lot.asset,
+        chain: lot.chain,
+        totalQty: 0,
+        totalBasis: 0,
+        lots: [],
+      });
+    }
+    const p = positionMap.get(key);
+    p.totalQty += lot.qtyRemaining;
+    p.totalBasis += lot.qtyRemaining * lot.basisEURPerUnit;
+    p.lots.push(lot);
+  }
+
+  // Compute unrealized P&L per position
+  const positions = [];
+  for (const [key, p] of positionMap.entries()) {
+    const live = livePrices.get(key);
+    if (!live) continue;
+    const marketValue = p.totalQty * live.priceEURPerUnit;
+    const unrealizedEUR = marketValue - p.totalBasis;
+    const unrealizedPct = p.totalBasis > 0 ? (unrealizedEUR / p.totalBasis) * 100 : 0;
+    positions.push({
+      ...p,
+      marketValueEUR: marketValue,
+      currentPriceEUR: live.priceEURPerUnit,
+      priceDate: live.date,
+      unrealizedEUR,
+      unrealizedPct,
+    });
+  }
+
+  // Filter to losses (potential harvest candidates)
+  const losses = positions
+    .filter(p => p.unrealizedEUR < -1)  // ignore <€1 losses
+    .sort((a, b) => a.unrealizedEUR - b.unrealizedEUR);  // biggest loss first
+
+  if (losses.length === 0) {
+    return `
+      <div class="panel" style="margin-top:1.5rem">
+        <div class="panel-head">
+          <span class="panel-title">🎯 Optimização Fiscal · Tax Loss Harvesting</span>
+        </div>
+        <div class="panel-body">
+          <div style="text-align:center;padding:1.5rem;color:var(--text-muted);font-size:0.82rem">
+            ${positions.length === 0
+              ? 'Sem posições abertas com preços actuais para analisar.'
+              : 'Nenhuma posição com unrealized loss significativa. Tudo a render! 🟢'}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const currentYear = new Date().getFullYear();
+  const yr = fifoState.summary.byYear[currentYear] || { anexoG: { gain: 0 }, taxEstimateEUR: 0 };
+  const totalLossEUR = losses.reduce((s, l) => s + l.unrealizedEUR, 0);
+
+  return `
+    <div class="panel" style="margin-top:1.5rem">
+      <div class="panel-head">
+        <span class="panel-title">🎯 Optimização Fiscal · Tax Loss Harvesting</span>
+        <span style="font-size:0.7rem;color:var(--text-muted)">${losses.length} posições com loss não realizado</span>
+      </div>
+      <div class="panel-body">
+        <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem">
+          <span>💡</span>
+          <div>
+            Tens <strong>€${fmt(Math.abs(totalLossEUR))}</strong> em losses não realizados.
+            Realizá-los antes de 31 Dez compensa ganhos do Anexo G no mesmo ano.
+            ${yr.anexoG.gain > 0 ? `<br><strong>Imposto actual estimado: €${fmt(yr.taxEstimateEUR)}.</strong> Realizar todos os losses reduzia-o até <strong>€${fmt(Math.max(0, yr.anexoG.gain + totalLossEUR) * 0.28)}</strong>.` : '<br>Sem ganhos G a compensar este ano — o loss pode ser reportado para os 5 anos seguintes.'}
+          </div>
+        </div>
+
+        <div style="overflow-x:auto">
+          <table style="width:100%;font-size:0.78rem;border-collapse:collapse">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border);text-align:left">
+                <th style="padding:0.5rem">Asset</th>
+                <th style="padding:0.5rem;text-align:right">Qty aberta</th>
+                <th style="padding:0.5rem;text-align:right">Basis</th>
+                <th style="padding:0.5rem;text-align:right">Valor actual</th>
+                <th style="padding:0.5rem;text-align:right">Loss</th>
+                <th style="padding:0.5rem;text-align:right">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${losses.slice(0, 10).map(p => `
+                <tr style="border-bottom:1px solid var(--border-soft)">
+                  <td style="padding:0.5rem"><strong>${p.asset}</strong> <span style="opacity:0.6;font-size:0.7rem">${p.chain}</span></td>
+                  <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">${fmt(p.totalQty, 6)}</td>
+                  <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">€${fmt(p.totalBasis)}</td>
+                  <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">€${fmt(p.marketValueEUR)}</td>
+                  <td style="padding:0.5rem;text-align:right;font-family:var(--mono);color:var(--red)">−€${fmt(Math.abs(p.unrealizedEUR))}</td>
+                  <td style="padding:0.5rem;text-align:right;font-family:var(--mono);color:var(--red)">${p.unrealizedPct.toFixed(1)}%</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          ${losses.length > 10 ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.6rem;text-align:center">+ ${losses.length - 10} posições com loss menor</div>` : ''}
+        </div>
+
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.8rem;line-height:1.5">
+          <strong>Nota fiscal PT:</strong> losses realizados em Anexo G podem ser deduzidos a ganhos do mesmo ano. Saldo negativo no ano transita para os 5 anos seguintes (Art. 55 nº 1 d CIRS). Permuta cripto↔cripto NÃO realiza loss — tens de vender para EUR/USD.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Portfolio charts: SVG-based, no external deps ──
+function renderPortfolioCharts(w) {
+  const fifoState = _getFifoStateFor(w);
+  if (!fifoState) return '';
+
+  // Compute allocation by asset (using current market value where available)
+  const livePrices = new Map();
+  for (const e of (state.events || [])) {
+    if (e.walletId !== w.id) continue;
+    if (typeof e.priceEUR !== 'number' || !e.amount || e.amount === 0) continue;
+    const key = `${e.asset}:${e.chain}`;
+    const cur = livePrices.get(key);
+    const ts = e.timestamp || 0;
+    const ppu = e.priceEUR / e.amount;
+    if (!cur || cur.timestamp < ts) livePrices.set(key, { priceEURPerUnit: ppu, timestamp: ts });
+  }
+
+  const allocationMap = new Map();   // asset → totalValue EUR
+  const chainMap = new Map();         // chain → totalValue EUR
+  let totalPortfolio = 0;
+  for (const lot of fifoState.lots) {
+    if (lot.qtyRemaining <= 1e-9) continue;
+    const key = `${lot.asset}:${lot.chain}`;
+    const live = livePrices.get(key);
+    if (!live) continue;
+    const value = lot.qtyRemaining * live.priceEURPerUnit;
+    if (value < 0.01) continue; // ignore dust
+    allocationMap.set(lot.asset, (allocationMap.get(lot.asset) || 0) + value);
+    chainMap.set(lot.chain, (chainMap.get(lot.chain) || 0) + value);
+    totalPortfolio += value;
+  }
+
+  if (totalPortfolio < 1) return '';
+
+  // Sort and take top 8 + "Outros"
+  const sortedAssets = [...allocationMap.entries()].sort((a, b) => b[1] - a[1]);
+  const top8 = sortedAssets.slice(0, 8);
+  const otherSum = sortedAssets.slice(8).reduce((s, [, v]) => s + v, 0);
+  const allocItems = otherSum > 0 ? [...top8, ['Outros', otherSum]] : top8;
+
+  // Sort chains
+  const sortedChains = [...chainMap.entries()].sort((a, b) => b[1] - a[1]);
+
+  // Color palette (gold-tinted)
+  const colors = ['#D4AF7A', '#E8C99B', '#A88556', '#F0D9A8', '#8E6B3D', '#B8956B', '#5C4624', '#D4B89C', '#998270'];
+
+  // Donut SVG renderer
+  const donutSVG = renderDonutSVG(allocItems, colors, totalPortfolio);
+  // Chain bars
+  const chainBarsHTML = sortedChains.map(([chain, val], i) => {
+    const pct = (val / totalPortfolio) * 100;
+    return `
+      <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.78rem">
+        <div style="min-width:70px;font-family:var(--mono);text-transform:uppercase;color:var(--text-muted);font-size:0.7rem">${chain}</div>
+        <div style="flex:1;background:var(--bg2);height:10px;border-radius:5px;overflow:hidden">
+          <div style="background:${colors[i % colors.length]};height:100%;width:${pct}%;transition:width 0.3s"></div>
+        </div>
+        <div style="min-width:90px;text-align:right;font-family:var(--mono);font-size:0.74rem">€${fmt(val)} · ${pct.toFixed(1)}%</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="two-col" style="margin-top:1.5rem">
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">📊 Allocation por Asset</span>
+          <span style="font-size:0.7rem;color:var(--text-muted)">Top ${top8.length}${otherSum > 0 ? ' + outros' : ''} · €${fmt(totalPortfolio)}</span>
+        </div>
+        <div class="panel-body">
+          ${donutSVG}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">⛓ Allocation por Chain</span>
+          <span style="font-size:0.7rem;color:var(--text-muted)">${sortedChains.length} chain${sortedChains.length>1?'s':''}</span>
+        </div>
+        <div class="panel-body" style="display:flex;flex-direction:column;gap:0.6rem">
+          ${chainBarsHTML}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Pure SVG donut chart — no dependencies
+function renderDonutSVG(items, colors, total) {
+  if (!items.length || total === 0) return '<div style="text-align:center;color:var(--text-muted);padding:1rem">Sem dados</div>';
+
+  const size = 220;
+  const strokeWidth = 36;
+  const radius = (size / 2) - (strokeWidth / 2);
+  const circumference = 2 * Math.PI * radius;
+  const center = size / 2;
+
+  let cumulativePct = 0;
+  const segments = items.map(([label, value], i) => {
+    const pct = value / total;
+    const dashArray = `${pct * circumference} ${circumference}`;
+    const rotation = cumulativePct * 360 - 90;
+    cumulativePct += pct;
+    return {
+      label, value, pct, color: colors[i % colors.length], dashArray, rotation,
+    };
+  });
+
+  const legend = segments.map(s => `
+    <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.75rem;padding:0.2rem 0">
+      <div style="width:10px;height:10px;background:${s.color};border-radius:2px;flex-shrink:0"></div>
+      <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><strong>${s.label}</strong></div>
+      <div style="font-family:var(--mono);font-size:0.72rem;text-align:right">€${fmt(s.value)}<br><span style="opacity:0.6">${(s.pct*100).toFixed(1)}%</span></div>
+    </div>
+  `).join('');
+
+  const svgSegments = segments.map(s => `
+    <circle cx="${center}" cy="${center}" r="${radius}"
+      fill="none" stroke="${s.color}" stroke-width="${strokeWidth}"
+      stroke-dasharray="${s.dashArray}"
+      transform="rotate(${s.rotation} ${center} ${center})"
+    />
+  `).join('');
+
+  return `
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;justify-content:center">
+      <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="flex-shrink:0">
+        <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="var(--bg2)" stroke-width="${strokeWidth}"/>
+        ${svgSegments}
+        <text x="${center}" y="${center - 6}" text-anchor="middle" style="font-family:var(--display);font-size:1.05rem;font-weight:600;fill:var(--text)">€${fmt(total, 0)}</text>
+        <text x="${center}" y="${center + 14}" text-anchor="middle" style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.1em;fill:var(--text-muted);text-transform:uppercase">Total</text>
+      </svg>
+      <div style="flex:1;min-width:180px;max-height:220px;overflow-y:auto">
+        ${legend}
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboard(w) {
   // Build unified protocol list
   const protoEntries = [];
@@ -6608,6 +6971,8 @@ function renderDashboard(w) {
     ${alertHTML}
     ${lotSugBanner}
 
+    ${renderDashboardFiscalHero(w)}
+
     <!-- HERO BLOCK -->
     <div class="hero-block">
       <div class="hero-main">
@@ -6683,6 +7048,10 @@ function renderDashboard(w) {
         <div class="panel-body no-pad"><div class="table-wrap">${renderRecentHistory()}</div></div>
       </div>
     </div>
+
+    ${renderPortfolioCharts(w)}
+
+    ${renderTaxLossHarvest(w)}
 
     ${live.lastRefresh?`<div class="dashboard-footer">
       <span>Última actualização <strong>${live.lastRefresh}</strong></span>
