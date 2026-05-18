@@ -4550,7 +4550,7 @@ const defiLlamaAdapter = (() => {
 
   // Fetch with exponential backoff on HTTP 429 (rate limit)
   async function _fetchWithRetry(url, opts = {}, label = 'defillama') {
-    const maxAttempts = 4;
+    const maxAttempts = 2; // reduced from 4 — circuit breaker handles persistent rate limits
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       await _throttle();
       let res = null;
@@ -4563,7 +4563,7 @@ const defiLlamaAdapter = (() => {
       if (!res) return null;
       if (res.ok) { try { return await res.json(); } catch { return null; } }
       if (res.status === 429 && attempt < maxAttempts) {
-        const wait = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s
+        const wait = 1500;
         errorLogger.warn(`defillama: 429 backoff ${wait}ms (${attempt}/${maxAttempts})`,
                          { url, attempt });
         await _delay(wait);
@@ -4600,8 +4600,10 @@ const defiLlamaAdapter = (() => {
 
   // Batch historical lookup — agrupa por dia, dedup coins, até PRICE_BATCH_SIZE por request
   // requests: Array<{ coinId, timestamp }>
+  // opts: { onProgress(done, total), signal }
   // Returns: Map<"coinId:dayTs", { price, confidence, symbol, noCoverage }>
-  async function getHistoricalPricesBatch(requests) {
+  // Circuit breaker: after 3 consecutive rate-limit failures, aborts and marks remaining as rate_limited
+  async function getHistoricalPricesBatch(requests, opts = {}) {
     const results = new Map();
     if (!Array.isArray(requests) || requests.length === 0) return results;
 
@@ -4615,17 +4617,47 @@ const defiLlamaAdapter = (() => {
       byDay.get(day).add(r.coinId);
     }
 
+    // Count total batches for progress reporting
+    let totalBatches = 0;
+    for (const coinSet of byDay.values()) {
+      totalBatches += Math.ceil(coinSet.size / PRICE_BATCH_SIZE);
+    }
+    let doneBatches = 0;
+    let consecutiveFailures = 0;
+    let rateLimited = false;
+
+    opts.onProgress?.(0, totalBatches);
+
     for (const [day, coinSet] of byDay.entries()) {
+      if (opts.signal?.aborted || rateLimited) break;
       const coins = [...coinSet];
       for (let i = 0; i < coins.length; i += PRICE_BATCH_SIZE) {
+        if (opts.signal?.aborted || rateLimited) break;
         const chunk = coins.slice(i, i + PRICE_BATCH_SIZE);
         const coinsParam = chunk.map(encodeURIComponent).join(',');
         const url = `${DEFILLAMA_BASE}/prices/historical/${day}/${coinsParam}?searchWidth=4h`;
 
         const data = await _fetchWithRetry(url, { timeout: 30000 }, 'defillama.batch');
 
+        if (data === null) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= 3) {
+            // Circuit breaker triggered — DefiLlama is rejecting us
+            rateLimited = true;
+            errorLogger.warn(`defillama: circuit breaker activated after ${consecutiveFailures} consecutive failures. Remaining ${totalBatches - doneBatches} batches skipped.`);
+            // Mark all remaining coins (current chunk + future) as rate_limited
+            for (const coinId of chunk) {
+              results.set(`${coinId}:${day}`, { price: null, rateLimited: true });
+            }
+            break;
+          }
+        } else {
+          consecutiveFailures = 0;
+        }
+
         for (const coinId of chunk) {
           const key = `${coinId}:${day}`;
+          if (results.has(key)) continue; // skip if already marked rateLimited
           const entry = data?.coins?.[coinId];
           if (entry && typeof entry.price === 'number') {
             results.set(key, {
@@ -4639,8 +4671,22 @@ const defiLlamaAdapter = (() => {
             results.set(key, { price: null, noCoverage: data !== null });
           }
         }
+
+        doneBatches++;
+        opts.onProgress?.(doneBatches, totalBatches);
       }
     }
+
+    // If circuit breaker fired, mark remaining (not-yet-attempted) keys as rateLimited too
+    if (rateLimited) {
+      for (const [day, coinSet] of byDay.entries()) {
+        for (const coinId of coinSet) {
+          const key = `${coinId}:${day}`;
+          if (!results.has(key)) results.set(key, { price: null, rateLimited: true });
+        }
+      }
+    }
+    results._rateLimited = rateLimited;
     return results;
   }
 
@@ -4850,7 +4896,21 @@ const priceOracle = (() => {
     });
     let fetchedResults = new Map();
     if (stillToFetch.size > 0 && !opts.signal?.aborted) {
-      fetchedResults = await defiLlamaAdapter.getHistoricalPricesBatch([...stillToFetch.values()]);
+      fetchedResults = await defiLlamaAdapter.getHistoricalPricesBatch(
+        [...stillToFetch.values()],
+        {
+          signal: opts.signal,
+          onProgress: (done, total) => {
+            opts.onProgress?.({
+              phase: 'fetching', i: done, total,
+              enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+            });
+          },
+        }
+      );
+      if (fetchedResults._rateLimited) {
+        stats._rateLimited = true;
+      }
     }
 
     // ─── PASS 4: pre-fetch EUR rates (ECB) ──────────────────────────────
@@ -4922,10 +4982,12 @@ const priceOracle = (() => {
                                { asset: event.asset, chain: event.chain, dateStr });
             }
           }
+        } else if (r?.rateLimited) {
+          priceNote = 'rate_limited';
         } else if (r?.noCoverage) {
           priceNote = 'no_coverage';
         } else {
-          priceNote = 'fetch_error';        // 429 ou network — retentar próxima sessão
+          priceNote = 'fetch_error';        // network — retentar próxima sessão
         }
       }
 
@@ -8035,8 +8097,15 @@ async function fetchPricesForActiveWallet() {
     });
 
     saveState();
-    const msg = `✓ Preços: ${stats.enriched} OK · ${stats.failed} sem preço · ${stats.skipped} skip`;
-    toast(msg, stats.failed > stats.enriched ? 'warn' : 'success');
+    let msg, level;
+    if (stats._rateLimited) {
+      msg = `⚠️ DefiLlama rate-limited. ${stats.enriched} OK · ${stats.failed} pendente. Espera ~30 min e tenta de novo.`;
+      level = 'warn';
+    } else {
+      msg = `✓ Preços: ${stats.enriched} OK · ${stats.failed} sem preço · ${stats.skipped} skip`;
+      level = stats.failed > stats.enriched ? 'warn' : 'success';
+    }
+    toast(msg, level);
   } catch (err) {
     errorLogger.error('fetchPrices: ' + err.message);
     toast('Price fetch falhou: ' + err.message, 'warn');
