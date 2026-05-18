@@ -5052,6 +5052,466 @@ window.aurumECB = ecbRateAdapter;
 window.aurumPriceCache = priceCache;
 
 
+// ──────────────────────────────────────────────────────────
+// Sprint 8.1: FIFO ENGINE + TAX CLASSIFIER
+//
+// Processes UniversalEvents → FIFO lots + disposals + fiscal summary.
+// Compliant with PT crypto tax regime (Lei 24-D/2022, OE/2023).
+//
+// Key principles:
+//   - FIFO per (wallet, asset, chain) — lots opened earliest are consumed first
+//   - Crypto-to-crypto swaps are NOT disposals (Art. 10 nº 6 c) — basis carries
+//   - Pre-2023 acquisitions: regime transitório Art. 220 OE/2023 → always G1 (exempt)
+//   - Post-2023, held ≥ 365 days → G1 (declarative, exempt)
+//   - Post-2023, held < 365 days → G (28% tax)
+//   - NFTs (erc721/erc1155) excluded (Art. 10 nº 18)
+//   - Self-transfers: no fiscal impact, skipped
+//   - Cashbacks/airdrops/staking rewards: zero-basis acquisition, category E pending
+//
+// Public API:
+//   fifoEngine.process(events, opts) → { lots, disposals, rewards, summary, warnings }
+//   fifoEngine.summaryByYear(disposals) → { 2023: {...}, 2024: {...} }
+//   fifoEngine.classifyEvent(event) → 'acquisition' | 'disposal' | 'swap' | 'reward' | 'skip'
+// ──────────────────────────────────────────────────────────
+const fifoEngine = (() => {
+
+  // Stablecoins are still "crypto-assets" for PT tax purposes
+  const STABLECOIN_SYMBOLS = new Set([
+    'USDC', 'USDT', 'DAI', 'EURC', 'FDUSD', 'PYUSD', 'TUSD', 'GUSD',
+    'USDS', 'sUSDS', 'USDC.E', 'USDbC', 'USDP', 'LUSD', 'MIM',
+    'EURS', 'EURE', 'AGEUR', 'EURT', 'CEUR'
+  ]);
+
+  // Fiat symbols (treated as off-ramp triggers — these ARE disposals)
+  const FIAT_SYMBOLS = new Set(['EUR', 'USD', 'GBP', 'CHF']);
+
+  // Regime transition: PT crypto tax law became effective 2023-01-01
+  // Acquisitions before this date → Art. 220 OE/2023 transitional regime → always G1
+  const REGIME_TRANSITION_TS = Math.floor(new Date('2023-01-01T00:00:00Z').getTime() / 1000);
+
+  // Holding period for exempt classification: 365 days
+  const HOLDING_PERIOD_DAYS = 365;
+  const HOLDING_PERIOD_SECONDS = HOLDING_PERIOD_DAYS * 86400;
+
+  // ── Classification ───────────────────────────────────────
+  // Returns: 'acquisition' | 'disposal' | 'swap_buy' | 'swap_sell' | 'reward' | 'skip'
+  function classifyEvent(event) {
+    if (!event) return 'skip';
+    // Self-transfers and zero amounts: no fiscal impact
+    if (event.direction === 'self' || !event.amount || event.amount === 0) return 'skip';
+    // NFTs excluded
+    if (event.category === 'erc721' || event.category === 'erc1155') return 'skip';
+
+    const tx = event.txType;
+    const dir = event.direction;
+
+    // Swaps: each side tagged separately (in=buy, out=sell)
+    if (tx === 'swap') return dir === 'in' ? 'swap_buy' : 'swap_sell';
+
+    // Staking rewards / cashbacks / airdrops — acquisition at fair value
+    if (tx === 'cashback' || tx === 'reward' || tx === 'airdrop' || tx === 'staking_reward') return 'reward';
+
+    // Receive without explicit reward type and without protocol → potential airdrop
+    if (dir === 'in' && tx === 'receive' && !event.protocol) {
+      // Spam heuristic: zero-priced receives that are obviously airdrops
+      // For now, treat as reward (basis = priceEUR; if priceEUR null, basis = 0)
+      return 'reward';
+    }
+
+    // Generic in/out
+    if (dir === 'in') return 'acquisition';   // bought, deposited (rare without context)
+    if (dir === 'out') return 'disposal';     // sold to fiat, sent off-chain
+
+    return 'skip';
+  }
+
+  // ── Lot management ───────────────────────────────────────
+  function _lotKey(walletId, asset, chain) {
+    return `${walletId}::${asset}::${chain}`;
+  }
+
+  function _isCryptoToCryptoSwap(eventA, eventB) {
+    // Both are crypto (including stablecoins) → not a disposal under PT law
+    const aFiat = FIAT_SYMBOLS.has((eventA.asset || '').toUpperCase());
+    const bFiat = FIAT_SYMBOLS.has((eventB.asset || '').toUpperCase());
+    return !aFiat && !bFiat;
+  }
+
+  function _regime(acqTimestamp, disposalTimestamp) {
+    // Pre-2023 acquisition → Art. 220 OE/2023 transitional → G1 (exempt, declarative)
+    if (acqTimestamp < REGIME_TRANSITION_TS) return { code: 'G1', reason: 'pre_2023' };
+    // Holding period
+    const heldSeconds = disposalTimestamp - acqTimestamp;
+    if (heldSeconds >= HOLDING_PERIOD_SECONDS) return { code: 'G1', reason: 'long_term' };
+    return { code: 'G', reason: 'short_term' };
+  }
+
+  // ── Main processor ──────────────────────────────────────
+  // events: array of UniversalEvents (already enriched with priceEUR)
+  // opts: { walletId, swapMode: 'permuta'|'aggressive' }  defaults: permuta
+  //   permuta: crypto↔crypto swaps carry basis (default — defensible per Art. 10 nº 6 c)
+  //   aggressive: each swap is dispose + acquire (rebatable interpretation)
+  function process(events, opts = {}) {
+    const walletId = opts.walletId || 'default';
+    const swapMode = opts.swapMode || 'permuta';
+
+    // Sort events chronologically (FIFO requires this)
+    const sorted = [...events].sort((a, b) => {
+      const ta = a.timestamp || Math.floor(new Date(a.date).getTime() / 1000);
+      const tb = b.timestamp || Math.floor(new Date(b.date).getTime() / 1000);
+      return ta - tb;
+    });
+
+    // State containers
+    const lotsMap = new Map();      // key → ordered array of {lotId, qtyRemaining, basisEURPerUnit, acqTimestamp, acqDate, source, originEventId}
+    const lots = [];                // flat list (history)
+    const disposals = [];           // realized disposals
+    const rewards = [];             // category E candidates
+    const warnings = [];            // events that couldn't be processed cleanly
+    let lotCounter = 0;
+    let disposalCounter = 0;
+
+    // Group events by txHash to process swaps atomically
+    const eventsByTx = new Map();
+    for (const e of sorted) {
+      const key = e.txHash || `${e.chain}_${e.timestamp}_${e.asset}_${e.direction}`;
+      if (!eventsByTx.has(key)) eventsByTx.set(key, []);
+      eventsByTx.get(key).push(e);
+    }
+
+    // Helper: open a new lot
+    function _openLot(event, qty, basisEURPerUnit, source, swapOriginAsset = null) {
+      lotCounter++;
+      const lotId = `L${lotCounter}`;
+      const ts = event.timestamp || Math.floor(new Date(event.date).getTime() / 1000);
+      const lot = {
+        lotId,
+        walletId,
+        asset: event.asset,
+        chain: event.chain,
+        qtyOpened: qty,
+        qtyRemaining: qty,
+        basisEURPerUnit,
+        basisEURTotal: qty * basisEURPerUnit,
+        acqTimestamp: ts,
+        acqDate: event.date || new Date(ts * 1000).toISOString().slice(0, 10),
+        source,                       // 'buy', 'receive', 'reward', 'swap_in', 'pre_2023'
+        swapOriginAsset,              // for permuta-mode swap_in: which asset funded this lot
+        originEventId: event.id || `${event.txHash}_${event.asset}`,
+        originTxHash: event.txHash,
+      };
+      const key = _lotKey(walletId, event.asset, event.chain);
+      if (!lotsMap.has(key)) lotsMap.set(key, []);
+      lotsMap.get(key).push(lot);
+      lots.push(lot);
+      return lot;
+    }
+
+    // Helper: consume FIFO lots for a disposal
+    // Returns: { lotsConsumed, totalBasis, qtyFulfilled, qtyShortfall }
+    function _consumeFifo(asset, chain, qty, disposalTimestamp) {
+      const key = _lotKey(walletId, asset, chain);
+      const queue = lotsMap.get(key) || [];
+      let remaining = qty;
+      let totalBasis = 0;
+      const consumed = [];
+
+      for (const lot of queue) {
+        if (remaining <= 1e-12) break;
+        if (lot.qtyRemaining <= 1e-12) continue;
+        const take = Math.min(lot.qtyRemaining, remaining);
+        const basisPortion = take * lot.basisEURPerUnit;
+        consumed.push({
+          lotId: lot.lotId,
+          qtyTaken: take,
+          basisEUR: basisPortion,
+          basisEURPerUnit: lot.basisEURPerUnit,
+          acqTimestamp: lot.acqTimestamp,
+          acqDate: lot.acqDate,
+          source: lot.source,
+          holdingDays: Math.floor((disposalTimestamp - lot.acqTimestamp) / 86400),
+          regime: _regime(lot.acqTimestamp, disposalTimestamp),
+        });
+        lot.qtyRemaining -= take;
+        totalBasis += basisPortion;
+        remaining -= take;
+      }
+
+      return {
+        lotsConsumed: consumed,
+        totalBasis,
+        qtyFulfilled: qty - remaining,
+        qtyShortfall: remaining,
+      };
+    }
+
+    // Helper: record a disposal
+    function _recordDisposal(event, qty, proceedsEUR, consumeResult, kind = 'sale') {
+      disposalCounter++;
+      const ts = event.timestamp || Math.floor(new Date(event.date).getTime() / 1000);
+      const date = event.date || new Date(ts * 1000).toISOString().slice(0, 10);
+      const fiscalYear = parseInt(date.slice(0, 4), 10);
+
+      // Determine regime based on lots consumed (mixed lots may span regimes)
+      // Total split into G vs G1 based on per-lot regime
+      let basisG = 0, basisG1 = 0, qtyG = 0, qtyG1 = 0;
+      for (const c of consumeResult.lotsConsumed) {
+        if (c.regime.code === 'G1') { basisG1 += c.basisEUR; qtyG1 += c.qtyTaken; }
+        else                        { basisG  += c.basisEUR; qtyG  += c.qtyTaken; }
+      }
+      const proceedsG  = (consumeResult.qtyFulfilled > 0) ? proceedsEUR * (qtyG  / consumeResult.qtyFulfilled) : 0;
+      const proceedsG1 = (consumeResult.qtyFulfilled > 0) ? proceedsEUR * (qtyG1 / consumeResult.qtyFulfilled) : 0;
+      const gainG  = proceedsG  - basisG;
+      const gainG1 = proceedsG1 - basisG1;
+
+      const disposal = {
+        disposalId: `D${disposalCounter}`,
+        walletId,
+        asset: event.asset,
+        chain: event.chain,
+        kind,                                     // 'sale' (to fiat) | 'swap_sell' (only if aggressive mode) | 'pay' (used to pay)
+        qtyDisposed: consumeResult.qtyFulfilled,
+        qtyShortfall: consumeResult.qtyShortfall,
+        proceedsEUR,
+        proceedsEURPerUnit: qty > 0 ? proceedsEUR / qty : 0,
+        basisEUR: consumeResult.totalBasis,
+        gainEUR: proceedsEUR - consumeResult.totalBasis,
+        // Split by regime
+        anexoG:  { qty: qtyG,  proceeds: proceedsG,  basis: basisG,  gain: gainG  },
+        anexoG1: { qty: qtyG1, proceeds: proceedsG1, basis: basisG1, gain: gainG1 },
+        lotsConsumed: consumeResult.lotsConsumed,
+        disposalTimestamp: ts,
+        disposalDate: date,
+        fiscalYear,
+        eventId: event.id || event.txHash,
+        txHash: event.txHash,
+      };
+
+      disposals.push(disposal);
+
+      if (consumeResult.qtyShortfall > 1e-9) {
+        warnings.push({
+          type: 'insufficient_basis',
+          eventId: disposal.eventId,
+          asset: event.asset,
+          chain: event.chain,
+          shortfall: consumeResult.qtyShortfall,
+          message: `Disposal de ${qty} ${event.asset} mas só temos ${consumeResult.qtyFulfilled} em lots. Falta basis para ${consumeResult.qtyShortfall.toFixed(8)} unidades.`,
+        });
+      }
+      return disposal;
+    }
+
+    // ── Main loop: process txs in chronological order ──────
+    const sortedTxKeys = [...eventsByTx.keys()].sort((a, b) => {
+      const eventsA = eventsByTx.get(a);
+      const eventsB = eventsByTx.get(b);
+      const tsA = eventsA[0].timestamp || Math.floor(new Date(eventsA[0].date).getTime() / 1000);
+      const tsB = eventsB[0].timestamp || Math.floor(new Date(eventsB[0].date).getTime() / 1000);
+      return tsA - tsB;
+    });
+
+    for (const txKey of sortedTxKeys) {
+      const txEvents = eventsByTx.get(txKey);
+      const txType = txEvents[0].txType;
+      const ins = txEvents.filter(e => e.direction === 'in' && e.amount > 0
+                                     && e.category !== 'erc721' && e.category !== 'erc1155');
+      const outs = txEvents.filter(e => e.direction === 'out' && e.amount > 0
+                                     && e.category !== 'erc721' && e.category !== 'erc1155');
+
+      // ─── SWAP handling ──────────────────────────────────
+      if (txType === 'swap' && ins.length > 0 && outs.length > 0) {
+        const swapIn = ins[0];   // simple case: 1-in 1-out (multi-leg handled below)
+        const swapOut = outs[0];
+
+        const cryptoToCrypto = _isCryptoToCryptoSwap(swapOut, swapIn);
+
+        if (swapMode === 'permuta' && cryptoToCrypto) {
+          // Permuta: carry basis from outgoing asset's consumed lots to the incoming asset's new lot
+          const consumeOut = _consumeFifo(swapOut.asset, swapOut.chain, swapOut.amount, swapOut.timestamp);
+          // New lot for swap_in with basis = consumed basis / qty_in
+          const basisPerUnit = swapIn.amount > 0 ? consumeOut.totalBasis / swapIn.amount : 0;
+          _openLot(swapIn, swapIn.amount, basisPerUnit, 'swap_in', swapOut.asset);
+          // Record meta only (no disposal entered)
+          if (consumeOut.qtyShortfall > 1e-9) {
+            warnings.push({
+              type: 'swap_shortfall',
+              eventId: swapOut.id || swapOut.txHash,
+              asset: swapOut.asset,
+              chain: swapOut.chain,
+              shortfall: consumeOut.qtyShortfall,
+              message: `Swap ${swapOut.amount} ${swapOut.asset} → ${swapIn.amount} ${swapIn.asset} mas falta basis para ${consumeOut.qtyShortfall.toFixed(8)}. Lot novo com basis 0 nessa parte.`,
+            });
+          }
+        } else {
+          // Aggressive mode OR fiat involved: treat as dispose + acquire
+          const proceedsEUR = (typeof swapOut.priceEUR === 'number' && swapOut.amount > 0)
+            ? swapOut.priceEUR  // priceEUR is total value in EUR for this event
+            : 0;
+          const consumeOut = _consumeFifo(swapOut.asset, swapOut.chain, swapOut.amount, swapOut.timestamp);
+          _recordDisposal(swapOut, swapOut.amount, proceedsEUR, consumeOut, 'swap_sell');
+          // Open new lot for swap_in at market value
+          const basisPerUnit = (typeof swapIn.priceEUR === 'number' && swapIn.amount > 0)
+            ? swapIn.priceEUR / swapIn.amount
+            : 0;
+          _openLot(swapIn, swapIn.amount, basisPerUnit, 'swap_in');
+        }
+        continue;
+      }
+
+      // ─── Non-swap events: process each independently ────
+      for (const e of txEvents) {
+        const klass = classifyEvent(e);
+        if (klass === 'skip') continue;
+
+        const eventPriceEUR = (typeof e.priceEUR === 'number') ? e.priceEUR : null;
+        const eventPriceEURPerUnit = (eventPriceEUR !== null && e.amount > 0)
+          ? eventPriceEUR / e.amount
+          : null;
+
+        if (klass === 'acquisition') {
+          // Generic incoming with value: basis = priceEUR (full)
+          const basisPerUnit = eventPriceEURPerUnit ?? 0;
+          _openLot(e, e.amount, basisPerUnit, 'buy');
+          if (eventPriceEURPerUnit === null) {
+            warnings.push({
+              type: 'missing_price',
+              eventId: e.id || e.txHash,
+              asset: e.asset,
+              chain: e.chain,
+              message: `Aquisição sem priceEUR — lot aberto com basis 0. Reclassifica ou re-corre Price Oracle.`,
+            });
+          }
+        }
+        else if (klass === 'reward') {
+          // Category E: zero-cost acquisition at fair value (basis = priceEUR at receipt)
+          const basisPerUnit = eventPriceEURPerUnit ?? 0;
+          const lot = _openLot(e, e.amount, basisPerUnit, 'reward');
+          rewards.push({
+            rewardId: `R${rewards.length + 1}`,
+            walletId,
+            asset: e.asset,
+            chain: e.chain,
+            qty: e.amount,
+            fairValueEUR: eventPriceEUR ?? 0,
+            timestamp: e.timestamp,
+            date: e.date,
+            fiscalYear: parseInt((e.date || '').slice(0, 4), 10) || null,
+            kind: e.txType || 'reward',                  // cashback | airdrop | staking_reward
+            lotId: lot.lotId,
+            eventId: e.id || e.txHash,
+            txHash: e.txHash,
+          });
+        }
+        else if (klass === 'disposal') {
+          // Outgoing without swap context: sale to fiat OR card payment OR external transfer
+          // Treat as disposal if priceEUR known; else warn
+          const ts = e.timestamp || Math.floor(new Date(e.date).getTime() / 1000);
+          const consumeOut = _consumeFifo(e.asset, e.chain, e.amount, ts);
+          const proceeds = eventPriceEUR ?? 0;
+          _recordDisposal(e, e.amount, proceeds, consumeOut, 'sale');
+        }
+      }
+    }
+
+    // ── Build summary ──────────────────────────────────────
+    const summary = _buildSummary(disposals, rewards, lots);
+
+    return { lots, disposals, rewards, warnings, summary };
+  }
+
+  // ── Aggregation helpers ───────────────────────────────────
+  function _buildSummary(disposals, rewards, lots) {
+    const byYear = {};
+
+    const ensureYear = y => {
+      if (!byYear[y]) byYear[y] = {
+        fiscalYear: y,
+        anexoG:  { qty: 0, proceeds: 0, basis: 0, gain: 0, count: 0 },
+        anexoG1: { qty: 0, proceeds: 0, basis: 0, gain: 0, count: 0 },
+        anexoE:  { totalEUR: 0, byKind: {}, count: 0 },
+        taxEstimateEUR: 0,
+      };
+      return byYear[y];
+    };
+
+    for (const d of disposals) {
+      const y = ensureYear(d.fiscalYear);
+      y.anexoG.qty      += d.anexoG.qty;
+      y.anexoG.proceeds += d.anexoG.proceeds;
+      y.anexoG.basis    += d.anexoG.basis;
+      y.anexoG.gain     += d.anexoG.gain;
+      if (d.anexoG.qty > 0) y.anexoG.count++;
+      y.anexoG1.qty      += d.anexoG1.qty;
+      y.anexoG1.proceeds += d.anexoG1.proceeds;
+      y.anexoG1.basis    += d.anexoG1.basis;
+      y.anexoG1.gain     += d.anexoG1.gain;
+      if (d.anexoG1.qty > 0) y.anexoG1.count++;
+    }
+
+    for (const r of rewards) {
+      if (!r.fiscalYear) continue;
+      const y = ensureYear(r.fiscalYear);
+      y.anexoE.totalEUR += r.fairValueEUR;
+      y.anexoE.count++;
+      y.anexoE.byKind[r.kind] = (y.anexoE.byKind[r.kind] || 0) + r.fairValueEUR;
+    }
+
+    // Tax estimate: 28% on positive G gains; G1 declarative only (assume 0% effective)
+    for (const y of Object.values(byYear)) {
+      const taxable = Math.max(0, y.anexoG.gain);
+      y.taxEstimateEUR = taxable * 0.28;
+    }
+
+    // Unrealized positions for context (lots still open)
+    const openLots = lots.filter(l => l.qtyRemaining > 1e-9);
+
+    return {
+      byYear,
+      totals: {
+        disposalsCount: disposals.length,
+        rewardsCount: rewards.length,
+        openLotsCount: openLots.length,
+        totalBasisOutstanding: openLots.reduce((s, l) => s + l.qtyRemaining * l.basisEURPerUnit, 0),
+      },
+    };
+  }
+
+  function summaryByYear(disposals) {
+    return _buildSummary(disposals, [], []).byYear;
+  }
+
+  // ── Diagnostics: lots approaching 365 day threshold ──────
+  function lotsApproachingExempt(lots, withinDays = 60) {
+    const nowTs = Math.floor(Date.now() / 1000);
+    const targetMin = nowTs - HOLDING_PERIOD_SECONDS;
+    const targetMax = nowTs - HOLDING_PERIOD_SECONDS + (withinDays * 86400);
+    return lots
+      .filter(l => l.qtyRemaining > 1e-9
+                && l.acqTimestamp >= targetMin
+                && l.acqTimestamp <= targetMax)
+      .map(l => ({
+        ...l,
+        daysUntilExempt: Math.ceil((l.acqTimestamp + HOLDING_PERIOD_SECONDS - nowTs) / 86400),
+      }))
+      .sort((a, b) => a.daysUntilExempt - b.daysUntilExempt);
+  }
+
+  return {
+    process,
+    classifyEvent,
+    summaryByYear,
+    lotsApproachingExempt,
+    STABLECOIN_SYMBOLS,
+    FIAT_SYMBOLS,
+    REGIME_TRANSITION_TS,
+    HOLDING_PERIOD_DAYS,
+  };
+})();
+
+window.aurumFifoEngine = fifoEngine;
+
+
 // ─────────────────────────────────────────────────
 // UniversalIndexer — orchestrates indexing per wallet
 // ─────────────────────────────────────────────────
