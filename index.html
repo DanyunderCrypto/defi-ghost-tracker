@@ -4662,10 +4662,11 @@ const ecbRateAdapter = (() => {
   }
 
   // dateStr: YYYY-MM-DD. Returns: USD→EUR rate (e.g. 0.92 = 1 USD = 0.92 EUR)
-  async function getUsdToEur(dateStr) {
+  // opts.skipThrottle: when called in parallel batch, skip the throttle gate
+  async function getUsdToEur(dateStr, opts = {}) {
     if (!dateStr) return null;
     // ECB does not publish weekend/holiday rates; Frankfurter falls back to last available
-    await _throttle();
+    if (!opts.skipThrottle) await _throttle();
     try {
       const url = `${ECB_RATE_BASE}/${dateStr}?from=USD&to=EUR`;
       const res = await safeFetch(url, { timeout: 20000 }, 'frankfurter');
@@ -4853,10 +4854,46 @@ const priceOracle = (() => {
     }
 
     // ─── PASS 4: pre-fetch EUR rates (ECB) ──────────────────────────────
+    // Cache-first: most dates will hit IDB. Only uncached dates go to network.
+    // Network calls are parallel (Frankfurter has no documented rate limit).
     const rateCache = new Map();
+    const uncachedDates = [];
     for (const dateStr of requiredRates) {
-      if (opts.signal?.aborted) break;
-      rateCache.set(dateStr, await getEurRate(dateStr));
+      const cached = await priceCache.getRate(dateStr);
+      if (typeof cached === 'number') {
+        rateCache.set(dateStr, cached);
+      } else {
+        uncachedDates.push(dateStr);
+      }
+    }
+    if (uncachedDates.length > 0 && !opts.signal?.aborted) {
+      opts.onProgress?.({
+        phase: 'rates', i: 0, total: uncachedDates.length,
+        enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+      });
+      // Parallel fetch with concurrency cap of 8 (Frankfurter handles this fine)
+      const CONCURRENCY = 8;
+      let done = 0;
+      for (let i = 0; i < uncachedDates.length; i += CONCURRENCY) {
+        if (opts.signal?.aborted) break;
+        const chunk = uncachedDates.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          chunk.map(dateStr => ecbRateAdapter.getUsdToEur(dateStr, { skipThrottle: true })
+            .then(r => ({ dateStr, rate: r }))
+            .catch(() => ({ dateStr, rate: null })))
+        );
+        for (const { dateStr, rate } of results) {
+          if (typeof rate === 'number') {
+            rateCache.set(dateStr, rate);
+            try { await priceCache.setRate(dateStr, rate); } catch {}
+          }
+        }
+        done += chunk.length;
+        opts.onProgress?.({
+          phase: 'rates', i: done, total: uncachedDates.length,
+          enriched: stats.enriched, skipped: stats.skipped, failed: stats.failed,
+        });
+      }
     }
 
     // ─── PASS 5: assign prices + persist USD cache ──────────────────────
@@ -7989,8 +8026,11 @@ async function fetchPricesForActiveWallet() {
       onProgress: (p) => {
         const phaseEl = document.getElementById('priceFetchPhase');
         const barEl = document.getElementById('priceFetchBar');
-        if (phaseEl) phaseEl.textContent = `${p.i}/${p.total} eventos · ✓ ${p.enriched} · ⤬ ${p.failed}`;
-        if (barEl) barEl.style.width = `${(p.i / p.total) * 100}%`;
+        const phaseLabel = p.phase === 'rates' ? '💱 Taxas EUR' :
+                          p.phase === 'fetching' ? '🔍 A pesquisar preços' :
+                          p.phase === 'enriching' ? '✨ A processar' : '⏳ A buscar';
+        if (phaseEl) phaseEl.textContent = `${phaseLabel} · ${p.i}/${p.total} · ✓ ${p.enriched} · ⤬ ${p.failed}`;
+        if (barEl && p.total > 0) barEl.style.width = `${(p.i / p.total) * 100}%`;
       },
     });
 
