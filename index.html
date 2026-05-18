@@ -4428,6 +4428,25 @@ const bitcoinIndexer = (() => {
 
       // Persist to state.events (alongside EVM events)
       state.events = state.events || [];
+
+      // Preserve price enrichment on re-index
+      const priceMap = new Map();
+      for (const e of state.events) {
+        if (e.chain === 'bitcoin' && e.walletAddress === walletInput.toLowerCase()) {
+          if (typeof e.priceEUR === 'number' || typeof e.priceUSD === 'number' || e.priceNote) {
+            priceMap.set(e.id, { priceEUR: e.priceEUR, priceUSD: e.priceUSD, priceNote: e.priceNote });
+          }
+        }
+      }
+      for (const e of unique) {
+        const p = priceMap.get(e.id);
+        if (p) {
+          if (typeof p.priceEUR === 'number') e.priceEUR = p.priceEUR;
+          if (typeof p.priceUSD === 'number') e.priceUSD = p.priceUSD;
+          if (p.priceNote) e.priceNote = p.priceNote;
+        }
+      }
+
       // Remove existing BTC events for this wallet (re-index from scratch)
       state.events = state.events.filter(e =>
         !(e.chain === 'bitcoin' && e.walletAddress === walletInput.toLowerCase())
@@ -5345,14 +5364,15 @@ const fifoEngine = (() => {
           }
         } else {
           // Aggressive mode OR fiat involved: treat as dispose + acquire
+          // priceEUR is PER-UNIT — multiply by amount for total proceeds
           const proceedsEUR = (typeof swapOut.priceEUR === 'number' && swapOut.amount > 0)
-            ? swapOut.priceEUR  // priceEUR is total value in EUR for this event
+            ? swapOut.priceEUR * swapOut.amount
             : 0;
           const consumeOut = _consumeFifo(swapOut.asset, swapOut.chain, swapOut.amount, swapOut.timestamp);
           _recordDisposal(swapOut, swapOut.amount, proceedsEUR, consumeOut, 'swap_sell');
-          // Open new lot for swap_in at market value
+          // Open new lot for swap_in at market value (per-unit)
           const basisPerUnit = (typeof swapIn.priceEUR === 'number' && swapIn.amount > 0)
-            ? swapIn.priceEUR / swapIn.amount
+            ? swapIn.priceEUR
             : 0;
           _openLot(swapIn, swapIn.amount, basisPerUnit, 'swap_in');
         }
@@ -5364,9 +5384,10 @@ const fifoEngine = (() => {
         const klass = classifyEvent(e);
         if (klass === 'skip') continue;
 
-        const eventPriceEUR = (typeof e.priceEUR === 'number') ? e.priceEUR : null;
-        const eventPriceEURPerUnit = (eventPriceEUR !== null && e.amount > 0)
-          ? eventPriceEUR / e.amount
+        // priceEUR is PER-UNIT (consistent with enrichEventsWithPrices output and renderHistory)
+        const eventPriceEURPerUnit = (typeof e.priceEUR === 'number') ? e.priceEUR : null;
+        const eventPriceEURTotal = (eventPriceEURPerUnit !== null && e.amount > 0)
+          ? eventPriceEURPerUnit * e.amount
           : null;
 
         if (klass === 'acquisition') {
@@ -5393,7 +5414,7 @@ const fifoEngine = (() => {
             asset: e.asset,
             chain: e.chain,
             qty: e.amount,
-            fairValueEUR: eventPriceEUR ?? 0,
+            fairValueEUR: eventPriceEURTotal ?? 0,
             timestamp: e.timestamp,
             date: e.date,
             fiscalYear: parseInt((e.date || '').slice(0, 4), 10) || null,
@@ -5408,7 +5429,7 @@ const fifoEngine = (() => {
           // Treat as disposal if priceEUR known; else warn
           const ts = e.timestamp || Math.floor(new Date(e.date).getTime() / 1000);
           const consumeOut = _consumeFifo(e.asset, e.chain, e.amount, ts);
-          const proceeds = eventPriceEUR ?? 0;
+          const proceeds = eventPriceEURTotal ?? 0;
           _recordDisposal(e, e.amount, proceeds, consumeOut, 'sale');
         }
       }
@@ -5702,7 +5723,28 @@ const universalIndexer = (() => {
 
         // Persist incrementally so user sees progress
         state.events = state.events || [];
-        // Remove existing events for this wallet+chain (will re-add)
+
+        // Build map of existing events to preserve price enrichment when re-indexing
+        // (Alchemy events don't have priceEUR — re-indexing would wipe Sprint 7 work)
+        const priceMap = new Map();
+        for (const e of state.events) {
+          if (e.walletAddress === walletAddress.toLowerCase() && e.chain === chain) {
+            if (typeof e.priceEUR === 'number' || typeof e.priceUSD === 'number' || e.priceNote) {
+              priceMap.set(e.id, { priceEUR: e.priceEUR, priceUSD: e.priceUSD, priceNote: e.priceNote });
+            }
+          }
+        }
+        // Re-apply preserved prices to incoming fresh events
+        for (const e of uniqueEvents) {
+          const preserved = priceMap.get(e.id);
+          if (preserved) {
+            if (typeof preserved.priceEUR === 'number') e.priceEUR = preserved.priceEUR;
+            if (typeof preserved.priceUSD === 'number') e.priceUSD = preserved.priceUSD;
+            if (preserved.priceNote) e.priceNote = preserved.priceNote;
+          }
+        }
+
+        // Remove existing events for this wallet+chain (will re-add with preserved prices)
         state.events = state.events.filter(e =>
           !(e.walletAddress === walletAddress.toLowerCase() && e.chain === chain)
         );
@@ -6658,7 +6700,8 @@ function renderTaxLossHarvest(w) {
     const key = `${e.asset}:${e.chain}`;
     const cur = livePrices.get(key);
     const ts = e.timestamp || 0;
-    const ppu = e.priceEUR / e.amount;
+    // priceEUR is per-unit — use directly
+    const ppu = e.priceEUR;
     if (!cur || cur.timestamp < ts) livePrices.set(key, { priceEURPerUnit: ppu, timestamp: ts, date: e.date });
   }
 
@@ -6790,7 +6833,8 @@ function renderPortfolioCharts(w) {
     const key = `${e.asset}:${e.chain}`;
     const cur = livePrices.get(key);
     const ts = e.timestamp || 0;
-    const ppu = e.priceEUR / e.amount;
+    // priceEUR is per-unit
+    const ppu = e.priceEUR;
     if (!cur || cur.timestamp < ts) livePrices.set(key, { priceEURPerUnit: ppu, timestamp: ts });
   }
 
@@ -9007,6 +9051,60 @@ async function clearPriceCacheUI() {
 }
 
 window.fetchPricesForActiveWallet = fetchPricesForActiveWallet;
+
+// Re-apply prices from IDB cache to state.events (no network calls)
+// Used to recover when state.events lost priceEUR but priceCache IDB still has the prices
+async function reapplyPricesFromCache() {
+  const w = activeWallet();
+  if (!w) { toast('Sem wallet activa', 'warn'); return; }
+
+  const wAddr = (w.addr || w.evm || '').toLowerCase();
+  const btcAddr = (w.bitcoinXpub || w.bitcoinAddress || '').toLowerCase();
+  const ids = [wAddr, btcAddr].filter(Boolean);
+  const events = (state.events || []).filter(e =>
+    ids.includes((e.walletAddress || '').toLowerCase()) &&
+    e.direction !== 'self' &&
+    e.amount > 0 &&
+    !(typeof e.priceEUR === 'number') &&
+    e.category !== 'erc721' && e.category !== 'erc1155'
+  );
+
+  if (events.length === 0) {
+    toast('Nada para re-aplicar — todos os events já têm preço', 'info');
+    return;
+  }
+
+  toast(`A re-aplicar cache a ${events.length} events…`, 'info');
+  let hits = 0, misses = 0;
+
+  for (const e of events) {
+    const dateStr = e.date || (e.timestamp ? new Date(e.timestamp * 1000).toISOString().slice(0, 10) : null);
+    if (!dateStr) { misses++; continue; }
+
+    try {
+      const usd = await priceCache.getPriceUSD(e.asset, e.chain, dateStr);
+      if (typeof usd !== 'number') { misses++; continue; }
+      const rate = await priceCache.getRate(dateStr);
+      if (typeof rate !== 'number') { misses++; continue; }
+      // usd from cache is per-unit (as stored by enrich pass 5).
+      // event.priceUSD / priceEUR stored as per-unit as well (see enrich).
+      e.priceUSD = usd;
+      e.priceEUR = usd * rate;
+      e.priceNote = null;
+      hits++;
+    } catch (err) {
+      misses++;
+    }
+  }
+
+  saveState();
+  // Bust dashboard FIFO cache
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  render();
+  toast(`✓ ${hits} preços re-aplicados · ${misses} sem cache disponível`,
+    hits > misses ? 'success' : 'warn');
+}
+window.reapplyPricesFromCache = reapplyPricesFromCache;
 window.cancelPriceFetch = cancelPriceFetch;
 window.clearPriceCacheUI = clearPriceCacheUI;
 
@@ -9357,6 +9455,7 @@ function renderHistory(w) {
                 ${isFetching ? '⏳ A buscar…' : (eventsNeedingPrice > 0 ? `💶 Buscar Preços (${eventsNeedingPrice} eventos)` : '✓ Preços completos')}
               </button>
               ${isFetching ? `<button class="btn btn-outline btn-sm" onclick="cancelPriceFetch()">✕ Cancelar</button>` : ''}
+              <button class="btn btn-outline btn-sm" onclick="reapplyPricesFromCache()" title="Re-aplicar preços já em cache aos eventos (não chama DefiLlama)">🔄 Re-aplicar Cache</button>
               <button class="btn btn-outline btn-sm" onclick="clearPriceCacheUI()">🗑 Limpar Cache</button>
               <span style="font-size:0.75rem;color:var(--text-muted);margin-left:auto">
                 ${walletEvents.filter(e => typeof e.priceEUR === 'number').length} / ${walletEvents.length} com preço
