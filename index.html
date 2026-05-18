@@ -9101,6 +9101,209 @@ function getTxUrl(chain, txHash) {
   return `${cfg.explorer}/tx/${txHash}`;
 }
 
+// ════════════════════════════════════════════════════════
+// Sprint 8.2: Render Fiscal Engine v2 panel — consumes fifoEngine
+// ════════════════════════════════════════════════════════
+function renderFiscalEngineV2(w, fiscalYear) {
+  // Collect all enriched events for this wallet
+  const events = (state.events || []).filter(e => e.walletId === w.id && typeof e.priceEUR === 'number');
+  // Also fold legacy collateral/cardSpends as synthetic events? Not yet — keep engine pure.
+
+  if (events.length === 0) {
+    return `
+      <div class="panel" style="margin-bottom:1.3rem;border-color:var(--gold)">
+        <div class="panel-head">
+          <span class="panel-title">🧮 Engine Fiscal v2 (Sprint 8 · BETA)</span>
+          <span style="font-size:0.7rem;color:var(--text-muted)">FIFO + Anexo G/G1/E</span>
+        </div>
+        <div class="panel-body">
+          <div class="alert alert-warn" style="font-size:0.82rem">
+            <span>⚠</span>
+            <div>
+              Sem eventos com preços enriched para esta wallet. Vai ao tab <strong>Histórico</strong> e corre
+              <strong>Universal Indexer</strong> + <strong>Price Oracle</strong> primeiro.
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Process via FIFO engine
+  let result;
+  try {
+    result = window.aurumFifoEngine.process(events, { walletId: w.id });
+  } catch (err) {
+    errorLogger.error('fifoEngine.process: ' + err.message, { wallet: w.id });
+    return `
+      <div class="panel" style="margin-bottom:1.3rem;border-color:var(--red,#e34)">
+        <div class="panel-head">
+          <span class="panel-title">🧮 Engine Fiscal v2 — erro</span>
+        </div>
+        <div class="panel-body">
+          <div class="alert alert-warn" style="font-size:0.82rem">
+            <span>⚠</span>
+            <div>
+              Engine fiscal v2 falhou: <code>${err.message}</code>. Activa Debug Mode (Ctrl+Shift+D) para ver o log.
+              O painel legacy abaixo continua a funcionar.
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const { lots, disposals, rewards, warnings, summary } = result;
+  const yr = summary.byYear[fiscalYear] || {
+    anexoG: { qty:0, proceeds:0, basis:0, gain:0, count:0 },
+    anexoG1: { qty:0, proceeds:0, basis:0, gain:0, count:0 },
+    anexoE: { totalEUR:0, byKind:{}, count:0 },
+    taxEstimateEUR: 0,
+  };
+
+  // Lots approaching exempt
+  const approaching = window.aurumFifoEngine.lotsApproachingExempt(lots, 60);
+
+  // Disposals filtered to year
+  const dispsInYear = disposals.filter(d => d.fiscalYear === fiscalYear);
+  const rewardsInYear = rewards.filter(r => r.fiscalYear === fiscalYear);
+
+  // Warnings filtered for relevance
+  const visibleWarnings = warnings.slice(0, 5);
+
+  return `
+    <div class="panel" style="margin-bottom:1.3rem;border-color:var(--gold)">
+      <div class="panel-head">
+        <span class="panel-title">🧮 Engine Fiscal v2 (Sprint 8 · BETA)</span>
+        <span style="font-size:0.7rem;color:var(--text-muted)">FIFO · ${disposals.length} alienações · ${lots.length} lots · ${rewards.length} rewards</span>
+      </div>
+      <div class="panel-body">
+
+        <!-- KPIs fiscais ano ${fiscalYear} -->
+        <div class="stats-grid" style="margin-bottom:1.3rem">
+          <div class="stat">
+            <div class="stat-label">Anexo G · &lt;365d</div>
+            <div class="stat-value ${yr.anexoG.gain > 0 ? 'sv-amber' : (yr.anexoG.gain < 0 ? 'sv-red' : '')}">€${fmt(yr.anexoG.gain)}</div>
+            <div class="stat-sub">${yr.anexoG.count} alien. · proc €${fmt(yr.anexoG.proceeds)} · basis €${fmt(yr.anexoG.basis)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Anexo G1 · ≥365d / pré-2023</div>
+            <div class="stat-value sv-green">€${fmt(yr.anexoG1.gain)}</div>
+            <div class="stat-sub">${yr.anexoG1.count} alien. · declarativo, isento</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Anexo E · Rendimentos</div>
+            <div class="stat-value sv-gold">€${fmt(yr.anexoE.totalEUR)}</div>
+            <div class="stat-sub">${yr.anexoE.count} eventos (cashback/airdrop/staking)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Imposto estimado</div>
+            <div class="stat-value ${yr.taxEstimateEUR > 0 ? 'sv-red' : 'sv-green'}">€${fmt(yr.taxEstimateEUR)}</div>
+            <div class="stat-sub">28% sobre G positivo</div>
+          </div>
+        </div>
+
+        ${approaching.length > 0 ? `
+          <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem">
+            <span>⏳</span>
+            <div>
+              <strong>${approaching.length} lot(s) prestes a tornar-se isentos (G1)</strong> nos próximos 60 dias.
+              ${approaching.slice(0,3).map(l => `<br>· ${l.asset} ${fmt(l.qtyRemaining,6)} — faltam <strong>${l.daysUntilExempt} dias</strong> (adquirido ${l.acqDate})`).join('')}
+              ${approaching.length > 3 ? `<br>... e mais ${approaching.length - 3}` : ''}
+            </div>
+          </div>
+        ` : ''}
+
+        ${visibleWarnings.length > 0 ? `
+          <div class="alert alert-warn" style="margin-bottom:1rem;font-size:0.78rem">
+            <span>⚠</span>
+            <div>
+              <strong>${warnings.length} aviso(s)</strong> do engine (mostrando ${visibleWarnings.length}):
+              ${visibleWarnings.map(w => `<br>· ${w.message}`).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Disposals table -->
+        ${dispsInYear.length > 0 ? `
+          <div style="margin-top:1rem">
+            <h4 style="font-family:var(--display);font-size:0.85rem;font-weight:500;margin-bottom:0.6rem;color:var(--text)">Alienações em ${fiscalYear} (${dispsInYear.length})</h4>
+            <div style="overflow-x:auto">
+              <table style="width:100%;font-size:0.75rem;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border);text-align:left">
+                    <th style="padding:0.5rem">Data</th>
+                    <th style="padding:0.5rem">Asset</th>
+                    <th style="padding:0.5rem;text-align:right">Qty</th>
+                    <th style="padding:0.5rem;text-align:right">Proceeds €</th>
+                    <th style="padding:0.5rem;text-align:right">Basis €</th>
+                    <th style="padding:0.5rem;text-align:right">G/L €</th>
+                    <th style="padding:0.5rem">Regime</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${dispsInYear.slice(0, 50).map(d => `
+                    <tr style="border-bottom:1px solid var(--border-soft)">
+                      <td style="padding:0.5rem;font-family:var(--mono);font-size:0.72rem">${d.disposalDate}</td>
+                      <td style="padding:0.5rem"><strong>${d.asset}</strong> <span style="opacity:0.6;font-size:0.7rem">${d.chain}</span></td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">${fmt(d.qtyDisposed, 6)}</td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">€${fmt(d.proceedsEUR)}</td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">€${fmt(d.basisEUR)}</td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono);color:${d.gainEUR > 0 ? 'var(--green)' : (d.gainEUR < 0 ? 'var(--red)' : 'var(--text-muted)')}">€${fmt(d.gainEUR)}</td>
+                      <td style="padding:0.5rem">
+                        ${d.anexoG.qty > 0 ? `<span class="badge badge-amber" style="font-size:0.65rem">G</span>` : ''}
+                        ${d.anexoG1.qty > 0 ? `<span class="badge badge-green" style="font-size:0.65rem">G1</span>` : ''}
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+              ${dispsInYear.length > 50 ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.6rem;text-align:center">+ ${dispsInYear.length - 50} alienações não mostradas</div>` : ''}
+            </div>
+          </div>
+        ` : `
+          <div style="font-size:0.78rem;color:var(--text-muted);padding:0.8rem;text-align:center;border:1px dashed var(--border-soft);border-radius:var(--radius);margin-top:1rem">
+            Sem alienações em ${fiscalYear}. Permuta cripto↔cripto não conta como alienação (Art. 10 nº 6 c).
+          </div>
+        `}
+
+        <!-- Rewards table -->
+        ${rewardsInYear.length > 0 ? `
+          <div style="margin-top:1rem">
+            <h4 style="font-family:var(--display);font-size:0.85rem;font-weight:500;margin-bottom:0.6rem;color:var(--text)">Rendimentos (Anexo E) em ${fiscalYear} (${rewardsInYear.length})</h4>
+            <div style="overflow-x:auto">
+              <table style="width:100%;font-size:0.75rem;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border);text-align:left">
+                    <th style="padding:0.5rem">Data</th>
+                    <th style="padding:0.5rem">Asset</th>
+                    <th style="padding:0.5rem">Tipo</th>
+                    <th style="padding:0.5rem;text-align:right">Qty</th>
+                    <th style="padding:0.5rem;text-align:right">Valor €</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rewardsInYear.slice(0, 30).map(r => `
+                    <tr style="border-bottom:1px solid var(--border-soft)">
+                      <td style="padding:0.5rem;font-family:var(--mono);font-size:0.72rem">${r.date}</td>
+                      <td style="padding:0.5rem"><strong>${r.asset}</strong></td>
+                      <td style="padding:0.5rem"><span class="badge badge-gold" style="font-size:0.65rem">${r.kind}</span></td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">${fmt(r.qty, 6)}</td>
+                      <td style="padding:0.5rem;text-align:right;font-family:var(--mono)">€${fmt(r.fairValueEUR)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+              ${rewardsInYear.length > 30 ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.6rem;text-align:center">+ ${rewardsInYear.length - 30} rewards não mostrados</div>` : ''}
+            </div>
+          </div>
+        ` : ''}
+
+      </div>
+    </div>
+  `;
+}
+
 function renderFiscal(w) {
   // ════════════════════════════════════════════════════════
   // Tax Report — Portugal IRS (Anexo G / G1 / E)
@@ -9176,6 +9379,8 @@ function renderFiscal(w) {
         <button class="btn btn-gold btn-sm" onclick="exportFiscalReport()">⬇ Relatório Completo (HTML)</button>
       </div>
     </div>
+
+    ${renderFiscalEngineV2(w, fiscalYear)}
 
     <div class="alert alert-info" style="margin-bottom:1.3rem;font-size:0.82rem">
       <span>⚖</span>
