@@ -2380,8 +2380,10 @@ body.stealth-mode .stealth-badge {
         <input class="form-input" id="w_apikey" placeholder="Cole a tua API key do Etherscan (opcional)">
         <span class="form-note">etherscan.io → My Account → API Keys. Só funciona para ETH mainnet no plano gratuito.</span>
       </div>
-      <div class="form-group form-full"><label class="form-label">Telegram Bot Token (para alertas)</label><input class="form-input" id="w_tg_token" placeholder="1234567890:AAF..."><span class="form-note">Cria um bot em @BotFather. Deixa em branco para não usar alertas Telegram.</span></div>
-      <div class="form-group form-full"><label class="form-label">Telegram Chat ID</label><input class="form-input" id="w_tg_chat" placeholder="-1001234567890 ou o teu user ID"></div>
+      <div class="form-group form-full">
+        <label class="form-label">Notas <span style="color:var(--muted)">(opcional)</span></label>
+        <input class="form-input" id="w_notes" placeholder="ex: wallet principal MetaMask">
+      </div>
     </div>
   </div>
   <div class="modal-foot"><button class="btn btn-gold" onclick="saveWallet()">Guardar Wallet</button><button class="btn btn-ghost" onclick="closeModal('modalWallet')">Cancelar</button></div>
@@ -3104,7 +3106,7 @@ const CARD_ISSUERS = {
 // STATE
 // ══════════════════════════════════════════════════════════
 let state = {
-  wallets:    [],   // [{id,name,addr,sol,apiKey,tgToken,tgChat}]
+  wallets:    [],   // [{id,name,addr,sol,bitcoinAddress,bitcoinXpub,apiKey,alchemyKey,notes,hfThreshold}]
   activeWId:  null,
   cards:      [],   // [{id,walletId,name,type,issuer,network,color}]
   txs:        [],   // [{id,walletId,cardId,date,desc,amount,currency,cashback,category,note,importId}]
@@ -3129,6 +3131,23 @@ let pendingImport = null;
 let pendingCols   = [];
 let refreshTimer  = null;
 let interestTimer = null;
+
+// Debug mode: enabled via ?debug=true URL param or Ctrl+Shift+D
+let debugMode = (() => {
+  try { return new URLSearchParams(window.location.search).get('debug') === 'true'; }
+  catch { return false; }
+})();
+window.toggleDebugMode = function() {
+  debugMode = !debugMode;
+  toast(`Debug mode ${debugMode ? 'ON' : 'OFF'}`, 'success');
+  render();
+};
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+    e.preventDefault();
+    window.toggleDebugMode();
+  }
+});
 
 // ══════════════════════════════════════════════════════════
 // STORAGE
@@ -5333,7 +5352,6 @@ async function loadState() {
       if (v1.wallets?.length) {
         state.wallets = v1.wallets.map(w => ({
           ...w, sol: w.sol || '', apiKey: w.apiKey || w.etherscanKey || '',
-          tgToken: '', tgChat: '',
         }));
         state.activeWId = v1.activeWalletId || v1.activeWId || v1.wallets[0]?.id || null;
       }
@@ -5982,7 +6000,7 @@ function renderSetup() {
 function saveFirstWallet() {
   const addr = document.getElementById('sw_addr')?.value?.trim();
   if (!addr?.startsWith('0x') || addr.length !== 42) { toast('Endereço EVM inválido','warn'); return; }
-  const w = { id:genId(), name:document.getElementById('sw_name')?.value?.trim()||'Minha Wallet', addr, sol:document.getElementById('sw_sol')?.value?.trim()||'', apiKey:document.getElementById('sw_apikey')?.value?.trim()||'', tgToken:'', tgChat:'' };
+  const w = { id:genId(), name:document.getElementById('sw_name')?.value?.trim()||'Minha Wallet', addr, sol:document.getElementById('sw_sol')?.value?.trim()||'', apiKey:document.getElementById('sw_apikey')?.value?.trim()||'' };
   state.wallets.push(w);
   state.activeWId = w.id;
   saveState(); boot();
@@ -7999,7 +8017,6 @@ function renderWallets() {
       ${state.wallets.map(w=>{
         const isActive = w.id===state.activeWId;
         const hasApiKey = !!w.apiKey;
-        const hasTg = !!w.tgToken;
         return `<div class="panel" style="border-color:${isActive?'var(--gold)':'var(--border)'}">
           <div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
             <div>
@@ -8011,7 +8028,7 @@ function renderWallets() {
               <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap">
                 <span class="badge ${w.alchemyKey?'badge-green':'badge-muted'}">${w.alchemyKey?'✓ Alchemy Key':'Sem Alchemy Key'}</span>
               <span class="badge ${hasApiKey?'badge-cyan':'badge-muted'}" style="font-size:0.56rem">${hasApiKey?'✓ Etherscan':'Sem Etherscan'}</span>
-                <span class="badge ${hasTg?'badge-blue':'badge-muted'}">${hasTg?'✓ Telegram':'Sem Telegram'}</span>
+              ${w.notes?`<span class="badge badge-muted" title="${w.notes.replace(/"/g,'&quot;')}">📝 Notas</span>`:''}
               </div>
             </div>
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
@@ -9215,27 +9232,19 @@ function renderSettings(w) {
       </div>
     </div>
 
-    <!-- ── Notificações ── -->
+    <!-- ── Alertas In-App ── -->
     <div class="panel" style="margin-bottom:1rem">
-      <div class="panel-head"><span class="panel-title">🔔 Notificações — Telegram</span></div>
+      <div class="panel-head"><span class="panel-title">🔔 Alertas In-App</span></div>
       <div class="panel-body">
         <div class="alert alert-info" style="margin-bottom:1rem;font-size:0.8rem">
           <span>ℹ</span>
-          <div>Recebe alertas de HF crítico no Telegram:<br>
-          1. Cria bot em <strong>@BotFather</strong> → /newbot<br>
-          2. Copia o token<br>
-          3. Envia /start ao teu bot para obter o Chat ID</div>
+          <div>Quando o teu Health Factor (lending positions) cair abaixo deste valor, vês um aviso amarelo no topo da app.</div>
         </div>
-        <div class="form-group"><label class="form-label">Bot Token</label><input class="form-input" id="set_tg_token" value="${w.tgToken||''}" placeholder="1234567890:AAF..."></div>
-        <div class="form-group"><label class="form-label">Chat ID</label><input class="form-input" id="set_tg_chat" value="${w.tgChat||''}" placeholder="O teu user ID ou group ID"></div>
         <div class="form-group">
           <label class="form-label">Alerta quando HF cair abaixo de</label>
           <input class="form-input" id="set_hf_threshold" type="number" step="0.1" min="1.0" max="3.0" value="${w.hfThreshold||1.2}" placeholder="1.2">
         </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          <button class="btn btn-gold btn-sm" onclick="saveTelegram()">Guardar</button>
-          <button class="btn btn-outline btn-sm" onclick="testTelegram()">Testar</button>
-        </div>
+        <button class="btn btn-gold btn-sm" onclick="saveAlertSettings()">Guardar</button>
       </div>
     </div>
 
@@ -9259,6 +9268,13 @@ function renderSettings(w) {
               <option value="4" ${(w.decimals||2)==4?'selected':''}>4 decimais (€100,5000)</option>
             </select>
           </div>
+          <div class="form-group">
+            <label class="form-label">Língua <span style="color:var(--text-muted);font-size:0.7rem">(em breve)</span></label>
+            <select class="form-select" id="set_lang" onchange="savePref('lang', this.value)" disabled>
+              <option value="pt" ${(w.lang||'pt')==='pt'?'selected':''}>🇵🇹 Português</option>
+              <option value="en" ${(w.lang||'pt')==='en'?'selected':''}>🇬🇧 English</option>
+            </select>
+          </div>
           <div class="form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
             <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
               <input type="checkbox" id="set_stealth" ${w.stealthMode?'checked':''} onchange="savePref('stealthMode', this.checked); render()">
@@ -9266,14 +9282,22 @@ function renderSettings(w) {
             </label>
             <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4">Substitui valores por ••• em sítios públicos. Clica num valor para revelar temporariamente.</div>
           </div>
+          <div class="form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
+            <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
+              <input type="checkbox" id="set_hide_spam" ${w.hideSpam!==false?'checked':''} onchange="savePref('hideSpam', this.checked); render()">
+              <span style="font-size:0.85rem">Ocultar spam tokens</span>
+            </label>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.3rem;line-height:1.4">Esconde tokens sem cobertura DefiLlama (airdrops lixo). Tokens "sem preço" não aparecem na tabela.</div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- ── Diagnóstico (colapsado) ── -->
-    <div class="panel" style="margin-bottom:1rem">
+    ${debugMode ? `
+    <!-- ── Diagnóstico (debug mode only) ── -->
+    <div class="panel" style="margin-bottom:1rem;border-color:var(--orange,#f9a825)">
       <div class="panel-head" onclick="document.getElementById('diagBody').classList.toggle('hidden')" style="cursor:pointer;user-select:none">
-        <span class="panel-title">🔧 Diagnóstico <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400;margin-left:0.5rem">(clica para expandir)</span></span>
+        <span class="panel-title">🔧 Diagnóstico <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400;margin-left:0.5rem">(debug mode · clica para expandir)</span></span>
       </div>
       <div class="panel-body hidden" id="diagBody">
 
@@ -9305,58 +9329,44 @@ function renderSettings(w) {
 
       </div>
     </div>
+    ` : ''}
 
-    <!-- ── Dados ── -->
-    <div class="panel" style="margin-bottom:1rem">
-      <div class="panel-head"><span class="panel-title">💾 Dados</span></div>
-      <div class="panel-body">
-        <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.8rem">Exporta a tua configuração para um ficheiro JSON ou restaura de um backup. Todos os dados ficam no teu browser — nada é enviado para servidores externos.</p>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          <button class="btn btn-outline btn-sm" onclick="exportJSON()">📦 Exportar Backup</button>
-          <label class="btn btn-outline btn-sm" style="cursor:pointer">
-            📂 Restaurar JSON
-            <input type="file" accept=".json" style="display:none" onchange="importJSON(event)">
-          </label>
-          <button class="btn btn-danger btn-sm" onclick="clearAll()" style="margin-left:auto">🗑 Apagar Tudo</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Diagnostics & Backups (Sprint 2 + 3) ── -->
+    <!-- ── Backup & Restore (merged Dados + Diagnostics) ── -->
     <div class="panel" style="margin-bottom:1rem">
       <div class="panel-head">
-        <span class="panel-title">🛡️ Diagnostics & Backups</span>
-        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">IndexedDB + auto-snapshots</span>
+        <span class="panel-title">💾 Backup & Restore</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">IndexedDB · local · zero servidor</span>
       </div>
       <div class="panel-body">
         <div id="diagPanel">
           <div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0">
-            <span style="opacity:0.7">A carregar diagnóstico…</span>
+            <span style="opacity:0.7">A carregar status…</span>
           </div>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:1rem">
-          <button class="btn btn-outline btn-sm" onclick="refreshDiagnostics()">↺ Atualizar</button>
           <button class="btn btn-gold btn-sm" onclick="exportFullBackup()">⬇ Exportar Backup Completo</button>
           <label class="btn btn-outline btn-sm" style="cursor:pointer">
             ⬆ Importar Backup
             <input type="file" accept=".json" style="display:none" onchange="importFullBackup(event)">
           </label>
+          <button class="btn btn-outline btn-sm" onclick="refreshDiagnostics()">↺ Atualizar Status</button>
+          <button class="btn btn-danger btn-sm" onclick="clearAll()" style="margin-left:auto">🗑 Apagar Tudo</button>
         </div>
         <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
           <span>ℹ</span>
           <div>
-            <strong>O Aurum guarda os teus dados no browser</strong> (IndexedDB + localStorage como fallback).
-            Não há servidor, ninguém os vê. Auto-backup mantém as últimas 5 versões.<br>
-            <strong>Exporta um backup completo</strong> para guardar em segurança (Drive, Dropbox, etc).
+            Os dados ficam no <strong>teu browser</strong> (IndexedDB + localStorage fallback). Não há servidor.
+            Auto-snapshots mantêm as últimas 5 versões. <strong>Exporta backup</strong> para guardar em Drive/Dropbox.
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ── Error Log (Sprint 3) ── -->
-    <div class="panel" style="margin-bottom:1rem">
+    ${debugMode ? `
+    <!-- ── Error Log (debug mode only) ── -->
+    <div class="panel" style="margin-bottom:1rem;border-color:var(--orange,#f9a825)">
       <div class="panel-head">
-        <span class="panel-title">📋 Log de Erros & Avisos</span>
+        <span class="panel-title">📋 Log de Erros & Avisos <span style="font-size:0.7rem;color:var(--text-muted);font-weight:400;margin-left:0.5rem">(debug mode)</span></span>
         <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted)">Local · zero tracking</span>
       </div>
       <div class="panel-body">
@@ -9373,13 +9383,14 @@ function renderSettings(w) {
         <div class="alert alert-info" style="margin-top:1rem;font-size:0.78rem">
           <span>🔒</span>
           <div>
-            <strong>Privacidade total.</strong> Os erros ficam <em>só no teu browser</em> (IndexedDB local).
-            Nada é enviado para servidores. Endereços, valores e chaves são automaticamente removidos antes de qualquer log.<br>
-            Se reportares um bug, podes <strong>"Copiar Relatório"</strong> e colar no email/Discord para ajudar a debugar.
+            <strong>Privacidade total.</strong> Erros só no teu browser (IndexedDB local).
+            Nada enviado para servidores. Endereços, valores e chaves automaticamente removidos antes de qualquer log.
+            Se reportares bug, <strong>"Copiar Relatório"</strong> e cola no Discord.
           </div>
         </div>
       </div>
     </div>
+    ` : ''}
 
     <!-- ── Sobre ── -->
     <div class="panel">
@@ -9406,11 +9417,24 @@ function renderSettings(w) {
           <div>
             <div style="font-family:var(--display);font-size:1.3rem;font-weight:600;color:var(--gold);letter-spacing:0.06em">AURUM</div>
             <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.25em;color:var(--text-muted);margin-top:0.2rem">YOUR DEFI · REFINED</div>
-            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.6rem">Versão 3.0 · Schema v${state._schemaVersion||4} · IndexedDB ✓</div>
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.6rem">v0.7.5 · Sprint 7.5 Cleanup · Schema v${state._schemaVersion||7}</div>
           </div>
         </div>
-        <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.55">
-          Tracker DeFi pessoal e privado. Dados guardados localmente no teu browser. Sem servidor, sem tracking, sem ads.
+        <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.55;margin-bottom:1rem">
+          Tracker fiscal DeFi <strong>local-first</strong> e open source. Dados guardados no teu browser (IndexedDB). Sem servidor, sem tracking, sem ads. Indexação on-chain via Alchemy + Mempool.space. Preços históricos via DefiLlama + ECB.
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
+          <a class="btn btn-outline btn-sm" href="https://github.com/danyundercrypto/aurum" target="_blank" rel="noopener">📦 GitHub</a>
+          <a class="btn btn-outline btn-sm" href="https://twitter.com/DanyunderCrypto" target="_blank" rel="noopener">🐦 Twitter</a>
+          <a class="btn btn-outline btn-sm" href="https://github.com/danyundercrypto/aurum/issues/new" target="_blank" rel="noopener">🐛 Reportar Bug</a>
+          <button class="btn btn-outline btn-sm" onclick="window.toggleDebugMode()">${debugMode?'🔧 Debug Mode: ON':'🔧 Debug Mode: OFF'}</button>
+        </div>
+        <div class="alert alert-info" style="font-size:0.75rem">
+          <span>⚖️</span>
+          <div>
+            <strong>Disclaimer fiscal.</strong> Aurum é uma ferramenta informativa. Não constitui aconselhamento fiscal.
+            Os cálculos seguem a interpretação dos autores da Lei 24-D/2022 e OE/2023, mas <strong>devem ser validados por um TOC certificado</strong> antes de submeter o IRS. Os autores não se responsabilizam por divergências com a AT.
+          </div>
         </div>
       </div>
     </div>
@@ -10245,12 +10269,18 @@ function checkAlerts(w) {
 function updateHFPill() {
   const pill = document.getElementById('hfPillTop');
   if (!pill) return;
+  const w = activeWallet();
+  const threshold = (w?.hfThreshold) || 1.5;
   let minHF=null;
   Object.values(live.positions).forEach(p=>{ if(p?.hf!==null&&p?.hf!==undefined){if(minHF===null||p.hf<minHF)minHF=p.hf;}});
-  if (minHF===null) { pill.className='hf-pill none'; pill.textContent='HF —'; return; }
+  // Hide entirely when no positions or HF safely above threshold
+  if (minHF===null || minHF >= threshold) {
+    pill.style.display='none';
+    return;
+  }
+  pill.style.display='';
   if (minHF<1.2) { pill.className='hf-pill danger'; pill.textContent=`⚠ HF ${minHF.toFixed(3)}`; }
-  else if (minHF<1.5) { pill.className='hf-pill warn'; pill.textContent=`HF ${minHF.toFixed(3)}`; }
-  else { pill.className='hf-pill safe'; pill.textContent=`HF ${minHF.toFixed(3)}`; }
+  else { pill.className='hf-pill warn'; pill.textContent=`HF ${minHF.toFixed(3)}`; }
 }
 
 function updateAvatarState(state) {
@@ -10264,15 +10294,8 @@ function pushNotif(title, body) {
   if ('Notification' in window && Notification.permission==='granted') new Notification(title,{body});
 }
 
-async function sendTelegram(w, msg) {
-  if (!w?.tgToken||!w?.tgChat) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${w.tgToken}/sendMessage`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({chat_id:w.tgChat,text:msg,parse_mode:'Markdown'})
-    });
-  } catch(e) {}
-}
+// Telegram alerts removed in Sprint 7.5 — function kept as no-op for backwards compat
+async function sendTelegram(w, msg) { /* no-op: Telegram alerts deprecated */ }
 
 // ══════════════════════════════════════════════════════════
 // TX HASH AUTO-FILL
@@ -12567,8 +12590,7 @@ function saveWallet() {
     bitcoinXpub,
     apiKey: document.getElementById('w_apikey')?.value?.trim() || '',
     alchemyKey: document.getElementById('w_alchemy_key')?.value?.trim() || '',
-    tgToken: document.getElementById('w_tg_token')?.value?.trim() || '',
-    tgChat: document.getElementById('w_tg_chat')?.value?.trim() || '',
+    notes: document.getElementById('w_notes')?.value?.trim() || '',
   };
   state.wallets.push(w);
   if (!state.activeWId) state.activeWId = w.id;
@@ -12589,8 +12611,8 @@ function editWallet(id) {
   document.getElementById('w_apikey').value = w.apiKey || '';
   const alchemyEl = document.getElementById('w_alchemy_key');
   if (alchemyEl) alchemyEl.value = w.alchemyKey || '';
-  document.getElementById('w_tg_token').value = w.tgToken || '';
-  document.getElementById('w_tg_chat').value = w.tgChat || '';
+  const notesEl = document.getElementById('w_notes');
+  if (notesEl) notesEl.value = w.notes || '';
   document.getElementById('modalWalletTitle').textContent = 'Editar Wallet';
   window._editWalletId = id;
   openModal('modalWallet');
@@ -12617,8 +12639,7 @@ function editWallet(id) {
 
     w2.apiKey = document.getElementById('w_apikey').value.trim() || '';
     w2.alchemyKey = document.getElementById('w_alchemy_key')?.value?.trim() || '';
-    w2.tgToken = document.getElementById('w_tg_token').value.trim() || '';
-    w2.tgChat = document.getElementById('w_tg_chat').value.trim() || '';
+    w2.notes = document.getElementById('w_notes')?.value?.trim() || '';
     saveState();
     closeModal('modalWallet');
     toast('Wallet actualizada ✓', 'success');
@@ -12732,17 +12753,11 @@ function saveApiKey() {
   setTimeout(refreshAll, 500);
 }
 
-function saveTelegram() {
+function saveAlertSettings() {
   const w=activeWallet(); if(!w)return;
-  w.tgToken=document.getElementById('set_tg_token')?.value?.trim()||'';
-  w.tgChat=document.getElementById('set_tg_chat')?.value?.trim()||'';
-  saveState(); toast('Telegram guardado ✓','success');
-}
-
-async function testTelegram() {
-  const w=activeWallet();
-  await sendTelegram(w,'👻 DeFi Ghost Tracker — Teste de conexão! Alertas activos.');
-  toast('Mensagem de teste enviada ✓','success');
+  const t = parseFloat(document.getElementById('set_hf_threshold')?.value);
+  if (!isNaN(t) && t >= 1.0 && t <= 3.0) w.hfThreshold = t;
+  saveState(); toast('Alertas guardados ✓','success');
 }
 
 // ══════════════════════════════════════════════════════════
