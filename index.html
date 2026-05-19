@@ -7478,9 +7478,34 @@ function renderHFChart() {
 }
 
 function renderUpcomingExemptions(w) {
-  const pending = state.collateral.filter(c=>c.walletId===w.id&&daysHeld(c.acqDate)<365)
+  // First try FIFO engine (Sprint 8.1+): real lots from indexed events
+  const fifoState = _getFifoStateFor(w);
+  if (fifoState && fifoState.lots.length > 0) {
+    const upcoming = window.aurumFifoEngine.lotsApproachingExempt(fifoState.lots, 90);
+    if (upcoming.length > 0) {
+      return upcoming.slice(0, 5).map(l => {
+        const heldDays = 365 - l.daysUntilExempt;
+        const pct = Math.min(100, (heldDays / 365) * 100);
+        const isentoDate = new Date((l.acqTimestamp + 365 * 86400) * 1000).toLocaleDateString('pt-PT');
+        const barCls = pct >= 80 ? 'prog-gold' : 'prog-amber';
+        const valEUR = l.qtyRemaining * l.basisEURPerUnit;
+        return `<div style="margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;margin-bottom:0.3rem">
+            <span style="font-size:0.82rem">${l.asset} <span style="opacity:0.6;font-size:0.7rem">${l.chain}</span> — €${fmt(valEUR)}</span>
+            <span style="font-family:var(--mono);font-size:0.7rem;color:var(--gold)">${l.daysUntilExempt}d</span>
+          </div>
+          <div class="prog-wrap"><div class="prog-bar ${barCls}" style="width:${pct}%"></div></div>
+          <div style="font-size:0.7rem;color:var(--muted);margin-top:0.2rem">Isento em ${isentoDate} · ${fmt(l.qtyRemaining, 6)} ${l.asset}</div>
+        </div>`;
+      }).join('');
+    }
+    return `<p style="color:var(--muted);font-size:0.85rem">Não há lots a aproximarem isenção nos próximos 90 dias. Os mais antigos já estão isentos ou foram alienados.</p>`;
+  }
+
+  // Legacy fallback: manually-added collateral lots (Sprint 1)
+  const pending = (state.collateral || []).filter(c=>c.walletId===w.id&&daysHeld(c.acqDate)<365)
     .sort((a,b)=>a.acqDate.localeCompare(b.acqDate)).slice(0,4);
-  if (!pending.length) return `<p style="color:var(--muted);font-size:0.85rem">Sem lotes pendentes. Vai ao separador <strong style="color:var(--gold)">365 Dias</strong> para adicionar.</p>`;
+  if (!pending.length) return `<p style="color:var(--muted);font-size:0.85rem">Sem lotes pendentes. Vai ao separador <strong style="color:var(--gold)">365 Dias</strong> para adicionar, ou ao <strong style="color:var(--gold)">Histórico</strong> para indexar transactions on-chain.</p>`;
   return pending.map(c=>{
     const held=daysHeld(c.acqDate), left=365-held, pct=Math.min(100,(held/365)*100);
     const isentoDate=new Date((new Date(c.acqDate+'T12:00:00')).getTime()+365*86400000).toLocaleDateString('pt-PT');
@@ -7497,11 +7522,71 @@ function renderUpcomingExemptions(w) {
 }
 
 function renderRecentHistory() {
+  const w = activeWallet();
+  if (!w) return `<div class="empty"><span class="empty-icon">📭</span><p style="font-size:0.85rem">Selecciona uma wallet activa.</p></div>`;
+
+  // Sprint 8.4: prefer indexed events (state.events) over legacy live.history
+  const walletEvents = _eventsForWallet(w);
+
+  if (walletEvents.length > 0) {
+    // Sort newest first, exclude self-transfers + spam + zero amounts
+    const filtered = walletEvents
+      .filter(e => e.direction !== 'self' && e.amount > 0 && !e.userOverride?.spam)
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+      .slice(0, 15);
+
+    if (filtered.length === 0) {
+      return `<div class="empty">
+        <span class="empty-icon">📭</span>
+        <p style="font-size:0.85rem">Sem transactions relevantes para mostrar.</p>
+        <button class="btn btn-outline btn-sm" onclick="showTab('history')">→ Ver histórico completo</button>
+      </div>`;
+    }
+
+    const dirIcon = (d) => d === 'in' ? '↓' : d === 'out' ? '↑' : '↻';
+    const dirColor = (d) => d === 'in' ? 'var(--green)' : d === 'out' ? 'var(--red)' : 'var(--text-muted)';
+    const typeColor = {
+      receive: '#16a34a', send: '#dc2626', swap: '#B8956A',
+      cashback: '#D4AF7A', staking_reward: '#06b6d4', airdrop: '#a78bfa',
+      lending_supply: '#7c3aed', lending_withdraw: '#a78bfa',
+      bridge: '#f59e0b', wrap: '#94a3b8', unwrap: '#cbd5e1',
+    };
+
+    return `<table>
+      <thead><tr>
+        <th>Data</th><th>Chain</th><th>Tipo</th><th>Ativo</th>
+        <th style="text-align:right">Qty</th>
+        <th style="text-align:right">EUR</th>
+        <th>TX</th>
+      </tr></thead>
+      <tbody>
+      ${filtered.map(e => {
+        const t = e.userOverride?.txType || e.type || 'unknown';
+        const valEUR = (typeof e.priceEUR === 'number' && e.amount) ? e.priceEUR * e.amount : null;
+        const explorerUrl = getTxUrl(e.chain, e.txHash);
+        return `<tr>
+          <td class="mono muted" style="font-size:0.7rem">${e.date || '—'}</td>
+          <td><span class="chain-dot" style="background:${(CHAINS[e.chain]?.color)||'#888'}"></span> ${(CHAINS[e.chain]?.name)||e.chain.toUpperCase()}</td>
+          <td><span style="color:${typeColor[t]||'#888'};font-weight:600;font-family:var(--mono);font-size:0.7rem;letter-spacing:0.05em">${dirIcon(e.direction)} ${t}</span></td>
+          <td><span style="font-weight:600">${e.asset || '?'}</span></td>
+          <td class="mono" style="text-align:right;font-size:0.74rem">${(e.amount || 0).toFixed(Math.min(6, e.amount < 1 ? 6 : 2))}</td>
+          <td class="mono" style="text-align:right;color:${valEUR !== null ? 'var(--gold)' : 'var(--muted)'};font-size:0.78rem">${valEUR !== null ? '€' + valEUR.toLocaleString('pt-PT', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</td>
+          <td class="mono muted" style="font-size:0.6rem">${explorerUrl ? `<a href="${explorerUrl}" target="_blank" style="color:var(--gold);text-decoration:none">${(e.txHash||'').slice(0,8)}…</a>` : '—'}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+    <div style="padding:0.6rem 1rem;text-align:center;font-size:0.7rem;color:var(--muted);border-top:1px solid var(--border)">
+      A mostrar ${filtered.length} mais recentes de ${walletEvents.length} eventos · <a href="#" onclick="showTab('history');return false" style="color:var(--gold)">Ver todos →</a>
+    </div>`;
+  }
+
+  // Legacy fallback: live.history (pre-Sprint 4)
   const all = [];
   Object.entries(live.history).forEach(([chain, evts]) => {
     if (Array.isArray(evts)) evts.forEach(e => all.push({...e, chain}));
   });
-  
+
   // Filter: by default hide events with $0 value (junk: BUSDC internal mint/burn, etc.)
   const showZero = state.showZeroValue === true;
   const filtered = showZero ? all : all.filter(e => (e.amountUSD || 0) > 0.01);
@@ -7515,7 +7600,7 @@ function renderRecentHistory() {
         ${activeWallet()?.alchemyKey ? '✓ Alchemy Key configurada' : '✗ Sem Alchemy Key — Config'}<br>
         Redes com posição: ${Object.entries(live.positions).filter(([,p])=>p?.totalCollateral>0).map(([k])=>k).join(', ')||'nenhuma'}<br>
       </p>
-      <button class="btn btn-gold btn-sm" onclick="refreshAll()">↻ Tentar novamente</button>
+      <button class="btn btn-gold btn-sm" onclick="showTab('history')">→ Indexar via Histórico</button>
     </div>`;
   }
 
@@ -14820,6 +14905,17 @@ function setProto(k) { activeProto=k; render(); }
 function setActiveCard(id) { activeCardId=id; render(); }
 function genId() { return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function fmt(n,d=2) { return new Intl.NumberFormat('pt-PT',{minimumFractionDigits:d,maximumFractionDigits:d}).format(n||0); }
+
+// Global formatter for event amounts (used by modals + tables)
+function fmtAmount(e) {
+  const a = +(e?.amount) || 0;
+  if (a === 0) return '0';
+  if (a < 0.0001) return a.toExponential(2);
+  if (a < 1) return a.toFixed(6);
+  if (a < 1000) return a.toFixed(4);
+  return a.toFixed(2);
+}
+window.fmtAmount = fmtAmount;
 function fmtDate(d) { if(!d)return'—'; try{return new Date(d+'T12:00:00').toLocaleDateString('pt-PT');}catch(e){return d;} }
 function truncAddr(a) { if(!a)return'—'; return a.slice(0,6)+'...'+a.slice(-4); }
 function truncTx(tx) { if(!tx)return'—'; if(tx.startsWith('0x')&&tx.length>16)return tx.slice(0,8)+'…'+tx.slice(-6); return tx.length>16?tx.slice(0,10)+'…':tx; }
