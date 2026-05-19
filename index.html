@@ -9198,6 +9198,9 @@ function openEventActionMenu(evt, eventId) {
   const e = _findEventById(eventId);
   if (!e) return;
 
+  // Store event ID for popover/modal handlers (avoids quote-escaping issues with IDs containing quotes)
+  window._activeRowEventId = eventId;
+
   const popover = document.createElement('div');
   popover.className = 'row-action-popover';
   popover.id = 'rowActionPopover';
@@ -9207,13 +9210,13 @@ function openEventActionMenu(evt, eventId) {
   const txUrl = getTxUrl(e.chain, e.txHash);
 
   popover.innerHTML = `
-    <button onclick="openReclassifyModal('${eventId}')">✎ Reclassificar tipo</button>
-    <button onclick="openPriceOverrideModal('${eventId}')">€ Editar valor EUR</button>
-    <button onclick="toggleEventSpam('${eventId}')">${isSpam ? '✓ Desmarcar spam' : '⊘ Marcar como spam'}</button>
-    <button onclick="openNoteModal('${eventId}')">${hasNote ? '✎ Editar nota' : '+ Adicionar nota'}</button>
+    <button onclick="openReclassifyModal()">✎ Reclassificar tipo</button>
+    <button onclick="openPriceOverrideModal()">€ Editar valor EUR</button>
+    <button onclick="toggleEventSpam()">${isSpam ? '✓ Desmarcar spam' : '⊘ Marcar como spam'}</button>
+    <button onclick="openNoteModal()">${hasNote ? '✎ Editar nota' : '+ Adicionar nota'}</button>
     <div class="divider"></div>
     <button onclick="window.open('${txUrl}','_blank');closeEventActionMenu()">↗ Ver no explorer</button>
-    ${e.userOverride ? '<div class="divider"></div><button class="danger" onclick="clearEventOverride(\''+eventId+'\')">↺ Repor original</button>' : ''}
+    ${e.userOverride ? '<div class="divider"></div><button class="danger" onclick="clearEventOverride()">↺ Repor original</button>' : ''}
   `;
 
   document.body.appendChild(popover);
@@ -9245,7 +9248,8 @@ window.closeEventActionMenu = closeEventActionMenu;
 
 // Toggle spam flag on user override
 function toggleEventSpam(eventId) {
-  const e = _findEventById(eventId);
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
   if (!e) return;
   e.userOverride = e.userOverride || {};
   e.userOverride.spam = !e.userOverride.spam;
@@ -9261,7 +9265,8 @@ window.toggleEventSpam = toggleEventSpam;
 
 // Clear all user overrides on an event (restore original)
 function clearEventOverride(eventId) {
-  const e = _findEventById(eventId);
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
   if (!e) return;
   if (!confirm('Repor classificação original? Perdes nota e overrides.')) return;
   delete e.userOverride;
@@ -9276,8 +9281,13 @@ window.clearEventOverride = clearEventOverride;
 // Reclassify modal — change txType
 function openReclassifyModal(eventId) {
   closeEventActionMenu();
-  const e = _findEventById(eventId);
-  if (!e) return;
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
+  if (!e) {
+    toast('Evento não encontrado', 'warn');
+    return;
+  }
+  window._activeRowEventId = id; // keep for save handler
   const currentType = e.userOverride?.txType || e.type || 'unknown';
   const options = [
     'receive', 'send', 'swap', 'cashback', 'reward', 'airdrop', 'staking_reward',
@@ -9286,13 +9296,13 @@ function openReclassifyModal(eventId) {
   ];
   const html = `
     <div class="modal-overlay" id="reclassifyModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
-      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%" onclick="event.stopPropagation()">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
           <div style="font-weight:600;font-size:1rem">Reclassificar transacção</div>
           <button onclick="closeReclassifyModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
         </div>
         <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.9rem">
-          ${e.date} · ${e.asset} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
+          ${e.date} · ${(e.asset || '').replace(/</g,'&lt;')} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
           Tipo actual: <strong style="color:var(--gold)">${currentType}</strong>
         </div>
         <label style="display:block;font-size:0.7rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem">Novo tipo</label>
@@ -9305,12 +9315,16 @@ function openReclassifyModal(eventId) {
         </div>
         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
           <button class="btn btn-outline btn-sm" onclick="closeReclassifyModal()">Cancelar</button>
-          <button class="btn btn-gold btn-sm" onclick="saveReclassify('${eventId}')">Guardar</button>
+          <button class="btn btn-gold btn-sm" onclick="saveReclassify()">Guardar</button>
         </div>
       </div>
     </div>
   `;
   document.body.insertAdjacentHTML('beforeend', html);
+  // Click outside modal-content closes it
+  document.getElementById('reclassifyModalOverlay').addEventListener('click', (ev) => {
+    if (ev.target.id === 'reclassifyModalOverlay') closeReclassifyModal();
+  });
 }
 window.openReclassifyModal = openReclassifyModal;
 
@@ -9320,8 +9334,9 @@ function closeReclassifyModal() {
 window.closeReclassifyModal = closeReclassifyModal;
 
 function saveReclassify(eventId) {
-  const e = _findEventById(eventId);
-  if (!e) return;
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
+  if (!e) { toast('Evento não encontrado', 'warn'); return; }
   const newType = document.getElementById('reclassifyTypeSelect')?.value;
   if (!newType) return;
   e.userOverride = e.userOverride || {};
@@ -9341,19 +9356,24 @@ window.saveReclassify = saveReclassify;
 // Price override modal
 function openPriceOverrideModal(eventId) {
   closeEventActionMenu();
-  const e = _findEventById(eventId);
-  if (!e) return;
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
+  if (!e) {
+    toast('Evento não encontrado', 'warn');
+    return;
+  }
+  window._activeRowEventId = id;
   const currentPriceEUR = typeof e.priceEUR === 'number' ? e.priceEUR : '';
   const currentTotal = (typeof e.priceEUR === 'number' && e.amount) ? (e.priceEUR * e.amount).toFixed(2) : '';
   const html = `
     <div class="modal-overlay" id="priceOverrideModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
-      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%" onclick="event.stopPropagation()">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
           <div style="font-weight:600;font-size:1rem">Override valor EUR</div>
           <button onclick="closePriceOverrideModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
         </div>
         <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.9rem">
-          ${e.date} · ${e.asset} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
+          ${e.date} · ${(e.asset || '').replace(/</g,'&lt;')} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
           Preço unitário actual: <strong>€${currentPriceEUR || '—'}</strong> · Total actual: <strong>€${currentTotal || '—'}</strong>
         </div>
         <label style="display:block;font-size:0.7rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem">Novo valor TOTAL em EUR (será dividido por quantidade automaticamente)</label>
@@ -9363,16 +9383,19 @@ function openPriceOverrideModal(eventId) {
           <div>Usa quando o Price Oracle falhou (token não coberto pela DefiLlama). Sobrevive a re-indexações e a Re-aplicar Cache.</div>
         </div>
         <div style="display:flex;gap:0.5rem;justify-content:space-between;margin-top:1rem">
-          <button class="btn btn-outline btn-sm" onclick="clearPriceOverride('${eventId}')" style="color:var(--red)">↺ Limpar override</button>
+          <button class="btn btn-outline btn-sm" onclick="clearPriceOverride()" style="color:var(--red)">↺ Limpar override</button>
           <div style="display:flex;gap:0.5rem">
             <button class="btn btn-outline btn-sm" onclick="closePriceOverrideModal()">Cancelar</button>
-            <button class="btn btn-gold btn-sm" onclick="savePriceOverride('${eventId}')">Guardar</button>
+            <button class="btn btn-gold btn-sm" onclick="savePriceOverride()">Guardar</button>
           </div>
         </div>
       </div>
     </div>
   `;
   document.body.insertAdjacentHTML('beforeend', html);
+  document.getElementById('priceOverrideModalOverlay').addEventListener('click', (ev) => {
+    if (ev.target.id === 'priceOverrideModalOverlay') closePriceOverrideModal();
+  });
   setTimeout(() => document.getElementById('priceOverrideTotalInput')?.focus(), 50);
 }
 window.openPriceOverrideModal = openPriceOverrideModal;
@@ -9383,8 +9406,9 @@ function closePriceOverrideModal() {
 window.closePriceOverrideModal = closePriceOverrideModal;
 
 function savePriceOverride(eventId) {
-  const e = _findEventById(eventId);
-  if (!e) return;
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
+  if (!e) { toast('Evento não encontrado', 'warn'); return; }
   const totalStr = document.getElementById('priceOverrideTotalInput')?.value;
   const total = parseFloat(totalStr);
   if (!isFinite(total) || total < 0) {
@@ -9413,7 +9437,8 @@ function savePriceOverride(eventId) {
 window.savePriceOverride = savePriceOverride;
 
 function clearPriceOverride(eventId) {
-  const e = _findEventById(eventId);
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
   if (!e) return;
   if (e.userOverride) {
     delete e.userOverride.priceEUR;
@@ -9438,12 +9463,17 @@ window.clearPriceOverride = clearPriceOverride;
 // Note modal
 function openNoteModal(eventId) {
   closeEventActionMenu();
-  const e = _findEventById(eventId);
-  if (!e) return;
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
+  if (!e) {
+    toast('Evento não encontrado', 'warn');
+    return;
+  }
+  window._activeRowEventId = id;
   const current = e.userOverride?.note || '';
   const html = `
     <div class="modal-overlay" id="noteModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
-      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%" onclick="event.stopPropagation()">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
           <div style="font-weight:600;font-size:1rem">Nota da transacção</div>
           <button onclick="closeNoteModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
@@ -9451,12 +9481,15 @@ function openNoteModal(eventId) {
         <textarea id="noteInput" class="form-input" style="width:100%;min-height:90px;resize:vertical" placeholder="ex: liquidez Uniswap V3 ETH/USDC, range 1800-2200...">${current.replace(/</g,'&lt;')}</textarea>
         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
           <button class="btn btn-outline btn-sm" onclick="closeNoteModal()">Cancelar</button>
-          <button class="btn btn-gold btn-sm" onclick="saveNote('${eventId}')">Guardar</button>
+          <button class="btn btn-gold btn-sm" onclick="saveNote()">Guardar</button>
         </div>
       </div>
     </div>
   `;
   document.body.insertAdjacentHTML('beforeend', html);
+  document.getElementById('noteModalOverlay').addEventListener('click', (ev) => {
+    if (ev.target.id === 'noteModalOverlay') closeNoteModal();
+  });
   setTimeout(() => document.getElementById('noteInput')?.focus(), 50);
 }
 window.openNoteModal = openNoteModal;
@@ -9467,7 +9500,8 @@ function closeNoteModal() {
 window.closeNoteModal = closeNoteModal;
 
 function saveNote(eventId) {
-  const e = _findEventById(eventId);
+  const id = eventId || window._activeRowEventId;
+  const e = _findEventById(id);
   if (!e) return;
   const note = document.getElementById('noteInput')?.value?.trim() || '';
   e.userOverride = e.userOverride || {};
@@ -9975,7 +10009,7 @@ function renderHistory(w) {
                         : `<span style="font-family:var(--mono);color:var(--text-muted)" title="${e.counterparty?.address || ''}">${fmtAddr(e.counterparty?.address)}</span>`}
                     </td>
                     <td><a href="${getTxUrl(e.chain, e.txHash)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:0.7rem;color:var(--gold)">${e.txHash.slice(0, 6)}…</a></td>
-                    <td style="text-align:center"><button class="btn-row-menu" onclick="openEventActionMenu(event, '${e.id}')" title="Acções">⋯</button></td>
+                    <td style="text-align:center"><button class="btn-row-menu" data-event-id="${(e.id || '').replace(/"/g, '&quot;')}" onclick="openEventActionMenu(event, this.dataset.eventId)" title="Acções">⋯</button></td>
                   </tr>
                 `;}).join('')}
               </tbody>
