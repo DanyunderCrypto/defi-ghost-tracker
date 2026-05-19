@@ -443,6 +443,56 @@ body::before { content:''; position:fixed; inset:0; z-index:1; pointer-events:no
 .btn-danger:hover { background:rgba(255,68,68,0.1); }
 .btn-blue   { background:linear-gradient(135deg,#2979ff,#4da6ff); color:#fff; }
 .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.72rem; }
+
+/* Row action menu (3-dot per transaction) */
+.btn-row-menu {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  font-size: 1rem;
+  line-height: 1;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.btn-row-menu:hover {
+  background: var(--surface-soft);
+  border-color: var(--border2);
+  color: var(--gold);
+}
+.row-action-popover {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  padding: 0.25rem 0;
+  min-width: 180px;
+}
+.row-action-popover button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.row-action-popover button:hover {
+  background: var(--surface-soft);
+  color: var(--gold);
+}
+.row-action-popover button.danger:hover { color: var(--red); }
+.row-action-popover .divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 0.25rem 0;
+}
 .btn-xs { padding: 0.25rem 0.6rem; font-size: 0.65rem; border-radius: 8px; }
 .btn-icon { width:32px; height:32px; padding:0; border-radius:50%; }
 
@@ -5116,13 +5166,19 @@ const fifoEngine = (() => {
   // Returns: 'acquisition' | 'disposal' | 'swap_buy' | 'swap_sell' | 'reward' | 'skip'
   function classifyEvent(event) {
     if (!event) return 'skip';
+    // User-marked spam: skip entirely
+    if (event.userOverride?.spam) return 'skip';
     // Self-transfers and zero amounts: no fiscal impact
     if (event.direction === 'self' || !event.amount || event.amount === 0) return 'skip';
     // NFTs excluded
     if (event.category === 'erc721' || event.category === 'erc1155') return 'skip';
 
-    const tx = event.txType;
+    // Respect user reclassification if present
+    const tx = event.userOverride?.txType || event.txType;
     const dir = event.direction;
+
+    // self_transfer override → skip
+    if (tx === 'self_transfer') return 'skip';
 
     // Swaps: each side tagged separately (in=buy, out=sell)
     if (tx === 'swap') return dir === 'in' ? 'swap_buy' : 'swap_sell';
@@ -5724,27 +5780,47 @@ const universalIndexer = (() => {
         // Persist incrementally so user sees progress
         state.events = state.events || [];
 
-        // Build map of existing events to preserve price enrichment when re-indexing
-        // (Alchemy events don't have priceEUR — re-indexing would wipe Sprint 7 work)
-        const priceMap = new Map();
+        // Build map of existing events to preserve enrichment when re-indexing.
+        // Alchemy events come fresh — without this, we lose:
+        //  · priceEUR/priceUSD/priceNote (Sprint 7 work)
+        //  · userOverride (Sprint 8.4: manual reclassification, spam, notes, price)
+        //  · _originalType / _originalPriceEUR (shadow originals for revert)
+        const preserveMap = new Map();
         for (const e of state.events) {
           if (e.walletAddress === walletAddress.toLowerCase() && e.chain === chain) {
-            if (typeof e.priceEUR === 'number' || typeof e.priceUSD === 'number' || e.priceNote) {
-              priceMap.set(e.id, { priceEUR: e.priceEUR, priceUSD: e.priceUSD, priceNote: e.priceNote });
+            const keep = {};
+            if (typeof e.priceEUR === 'number') keep.priceEUR = e.priceEUR;
+            if (typeof e.priceUSD === 'number') keep.priceUSD = e.priceUSD;
+            if (e.priceNote) keep.priceNote = e.priceNote;
+            if (e.userOverride) keep.userOverride = e.userOverride;
+            if (e._originalType) keep._originalType = e._originalType;
+            if (typeof e._originalPriceEUR === 'number') keep._originalPriceEUR = e._originalPriceEUR;
+            if (Object.keys(keep).length > 0) preserveMap.set(e.id, keep);
+          }
+        }
+        // Re-apply preserved fields to incoming fresh events
+        for (const e of uniqueEvents) {
+          const keep = preserveMap.get(e.id);
+          if (!keep) continue;
+          if (typeof keep.priceEUR === 'number') e.priceEUR = keep.priceEUR;
+          if (typeof keep.priceUSD === 'number') e.priceUSD = keep.priceUSD;
+          if (keep.priceNote) e.priceNote = keep.priceNote;
+          if (keep.userOverride) {
+            e.userOverride = keep.userOverride;
+            // Re-apply override side-effects to canonical fields
+            if (keep.userOverride.txType) {
+              e._originalType = keep._originalType || e.type;
+              e.type = keep.userOverride.txType;
+            }
+            if (typeof keep.userOverride.priceEUR === 'number') {
+              e._originalPriceEUR = keep._originalPriceEUR ?? e.priceEUR;
+              e.priceEUR = keep.userOverride.priceEUR;
+              e.priceNote = 'user_override';
             }
           }
         }
-        // Re-apply preserved prices to incoming fresh events
-        for (const e of uniqueEvents) {
-          const preserved = priceMap.get(e.id);
-          if (preserved) {
-            if (typeof preserved.priceEUR === 'number') e.priceEUR = preserved.priceEUR;
-            if (typeof preserved.priceUSD === 'number') e.priceUSD = preserved.priceUSD;
-            if (preserved.priceNote) e.priceNote = preserved.priceNote;
-          }
-        }
 
-        // Remove existing events for this wallet+chain (will re-add with preserved prices)
+        // Remove existing events for this wallet+chain (will re-add with preserved fields)
         state.events = state.events.filter(e =>
           !(e.walletAddress === walletAddress.toLowerCase() && e.chain === chain)
         );
@@ -9105,6 +9181,305 @@ async function reapplyPricesFromCache() {
     hits > misses ? 'success' : 'warn');
 }
 window.reapplyPricesFromCache = reapplyPricesFromCache;
+
+// ══════════════════════════════════════════════════════════
+// Sprint 8.4.1: Per-row event actions (3-dot menu + reclassify modal)
+// ══════════════════════════════════════════════════════════
+
+// Find event by id across state
+function _findEventById(eventId) {
+  return (state.events || []).find(e => e.id === eventId);
+}
+
+// Show the 3-dot popover anchored to the click target
+function openEventActionMenu(evt, eventId) {
+  evt.stopPropagation();
+  closeEventActionMenu();
+  const e = _findEventById(eventId);
+  if (!e) return;
+
+  const popover = document.createElement('div');
+  popover.className = 'row-action-popover';
+  popover.id = 'rowActionPopover';
+
+  const isSpam = !!e.userOverride?.spam;
+  const hasNote = !!e.userOverride?.note;
+  const txUrl = getTxUrl(e.chain, e.txHash);
+
+  popover.innerHTML = `
+    <button onclick="openReclassifyModal('${eventId}')">✎ Reclassificar tipo</button>
+    <button onclick="openPriceOverrideModal('${eventId}')">€ Editar valor EUR</button>
+    <button onclick="toggleEventSpam('${eventId}')">${isSpam ? '✓ Desmarcar spam' : '⊘ Marcar como spam'}</button>
+    <button onclick="openNoteModal('${eventId}')">${hasNote ? '✎ Editar nota' : '+ Adicionar nota'}</button>
+    <div class="divider"></div>
+    <button onclick="window.open('${txUrl}','_blank');closeEventActionMenu()">↗ Ver no explorer</button>
+    ${e.userOverride ? '<div class="divider"></div><button class="danger" onclick="clearEventOverride(\''+eventId+'\')">↺ Repor original</button>' : ''}
+  `;
+
+  document.body.appendChild(popover);
+
+  // Position near click target
+  const rect = evt.target.getBoundingClientRect();
+  const popH = popover.offsetHeight;
+  const popW = popover.offsetWidth;
+  let top = rect.bottom + 4;
+  let left = rect.right - popW;
+  // Flip up if would overflow viewport bottom
+  if (top + popH > window.innerHeight) top = rect.top - popH - 4;
+  if (left < 4) left = 4;
+  popover.style.top = top + 'px';
+  popover.style.left = left + 'px';
+
+  // Close on outside click (next tick)
+  setTimeout(() => {
+    document.addEventListener('click', closeEventActionMenu, { once: true });
+  }, 0);
+}
+window.openEventActionMenu = openEventActionMenu;
+
+function closeEventActionMenu() {
+  const p = document.getElementById('rowActionPopover');
+  if (p) p.remove();
+}
+window.closeEventActionMenu = closeEventActionMenu;
+
+// Toggle spam flag on user override
+function toggleEventSpam(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  e.userOverride = e.userOverride || {};
+  e.userOverride.spam = !e.userOverride.spam;
+  e.userOverride.updatedAt = Date.now();
+  closeEventActionMenu();
+  saveState();
+  // Bust FIFO cache
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  toast(e.userOverride.spam ? '⊘ Marcado como spam' : '✓ Desmarcado spam', 'success');
+  render();
+}
+window.toggleEventSpam = toggleEventSpam;
+
+// Clear all user overrides on an event (restore original)
+function clearEventOverride(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  if (!confirm('Repor classificação original? Perdes nota e overrides.')) return;
+  delete e.userOverride;
+  closeEventActionMenu();
+  saveState();
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  toast('↺ Original reposto', 'success');
+  render();
+}
+window.clearEventOverride = clearEventOverride;
+
+// Reclassify modal — change txType
+function openReclassifyModal(eventId) {
+  closeEventActionMenu();
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const currentType = e.userOverride?.txType || e.type || 'unknown';
+  const options = [
+    'receive', 'send', 'swap', 'cashback', 'reward', 'airdrop', 'staking_reward',
+    'lending_supply', 'lending_withdraw', 'wrap', 'unwrap', 'bridge',
+    'cex_deposit', 'cex_withdrawal', 'card_funding', 'self_transfer', 'unknown'
+  ];
+  const html = `
+    <div class="modal-overlay" id="reclassifyModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+          <div style="font-weight:600;font-size:1rem">Reclassificar transacção</div>
+          <button onclick="closeReclassifyModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
+        </div>
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.9rem">
+          ${e.date} · ${e.asset} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
+          Tipo actual: <strong style="color:var(--gold)">${currentType}</strong>
+        </div>
+        <label style="display:block;font-size:0.7rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem">Novo tipo</label>
+        <select id="reclassifyTypeSelect" class="form-select" style="width:100%">
+          ${options.map(o => `<option value="${o}" ${o===currentType?'selected':''}>${o}</option>`).join('')}
+        </select>
+        <div class="alert alert-info" style="font-size:0.72rem;margin-top:0.9rem">
+          <span>ℹ</span>
+          <div>Reclassificação afecta o cálculo fiscal (Anexo G/G1/E). Sobrevive a re-indexações.</div>
+        </div>
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+          <button class="btn btn-outline btn-sm" onclick="closeReclassifyModal()">Cancelar</button>
+          <button class="btn btn-gold btn-sm" onclick="saveReclassify('${eventId}')">Guardar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+window.openReclassifyModal = openReclassifyModal;
+
+function closeReclassifyModal() {
+  document.getElementById('reclassifyModalOverlay')?.remove();
+}
+window.closeReclassifyModal = closeReclassifyModal;
+
+function saveReclassify(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const newType = document.getElementById('reclassifyTypeSelect')?.value;
+  if (!newType) return;
+  e.userOverride = e.userOverride || {};
+  e.userOverride.txType = newType;
+  e.userOverride.updatedAt = Date.now();
+  // Also apply to canonical .type for legacy renderers (preserved in userOverride so we can revert)
+  e._originalType = e._originalType || e.type;
+  e.type = newType;
+  closeReclassifyModal();
+  saveState();
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  toast(`✓ Reclassificado como "${newType}"`, 'success');
+  render();
+}
+window.saveReclassify = saveReclassify;
+
+// Price override modal
+function openPriceOverrideModal(eventId) {
+  closeEventActionMenu();
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const currentPriceEUR = typeof e.priceEUR === 'number' ? e.priceEUR : '';
+  const currentTotal = (typeof e.priceEUR === 'number' && e.amount) ? (e.priceEUR * e.amount).toFixed(2) : '';
+  const html = `
+    <div class="modal-overlay" id="priceOverrideModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+          <div style="font-weight:600;font-size:1rem">Override valor EUR</div>
+          <button onclick="closePriceOverrideModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
+        </div>
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.9rem">
+          ${e.date} · ${e.asset} ${fmtAmount(e)} · ${e.chain.toUpperCase()}<br>
+          Preço unitário actual: <strong>€${currentPriceEUR || '—'}</strong> · Total actual: <strong>€${currentTotal || '—'}</strong>
+        </div>
+        <label style="display:block;font-size:0.7rem;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem">Novo valor TOTAL em EUR (será dividido por quantidade automaticamente)</label>
+        <input id="priceOverrideTotalInput" type="number" step="0.01" class="form-input" placeholder="ex: 250.50" value="${currentTotal}" style="width:100%">
+        <div class="alert alert-info" style="font-size:0.72rem;margin-top:0.9rem">
+          <span>ℹ</span>
+          <div>Usa quando o Price Oracle falhou (token não coberto pela DefiLlama). Sobrevive a re-indexações e a Re-aplicar Cache.</div>
+        </div>
+        <div style="display:flex;gap:0.5rem;justify-content:space-between;margin-top:1rem">
+          <button class="btn btn-outline btn-sm" onclick="clearPriceOverride('${eventId}')" style="color:var(--red)">↺ Limpar override</button>
+          <div style="display:flex;gap:0.5rem">
+            <button class="btn btn-outline btn-sm" onclick="closePriceOverrideModal()">Cancelar</button>
+            <button class="btn btn-gold btn-sm" onclick="savePriceOverride('${eventId}')">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
+  setTimeout(() => document.getElementById('priceOverrideTotalInput')?.focus(), 50);
+}
+window.openPriceOverrideModal = openPriceOverrideModal;
+
+function closePriceOverrideModal() {
+  document.getElementById('priceOverrideModalOverlay')?.remove();
+}
+window.closePriceOverrideModal = closePriceOverrideModal;
+
+function savePriceOverride(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const totalStr = document.getElementById('priceOverrideTotalInput')?.value;
+  const total = parseFloat(totalStr);
+  if (!isFinite(total) || total < 0) {
+    toast('Valor inválido', 'warn');
+    return;
+  }
+  if (!e.amount || e.amount === 0) {
+    toast('Evento sem quantidade — não pode ter preço', 'warn');
+    return;
+  }
+  const pricePerUnit = total / e.amount;
+  e.userOverride = e.userOverride || {};
+  e.userOverride.priceEUR = pricePerUnit;
+  e.userOverride.priceEURTotal = total;
+  e.userOverride.updatedAt = Date.now();
+  // Apply to canonical fields
+  e._originalPriceEUR = e._originalPriceEUR ?? e.priceEUR;
+  e.priceEUR = pricePerUnit;
+  e.priceNote = 'user_override';
+  closePriceOverrideModal();
+  saveState();
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  toast(`✓ Valor override: €${total.toFixed(2)} total`, 'success');
+  render();
+}
+window.savePriceOverride = savePriceOverride;
+
+function clearPriceOverride(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  if (e.userOverride) {
+    delete e.userOverride.priceEUR;
+    delete e.userOverride.priceEURTotal;
+  }
+  // Restore original if we saved it
+  if (typeof e._originalPriceEUR === 'number') {
+    e.priceEUR = e._originalPriceEUR;
+    delete e._originalPriceEUR;
+  } else {
+    e.priceEUR = null;
+  }
+  e.priceNote = null;
+  closePriceOverrideModal();
+  saveState();
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  toast('↺ Override removido', 'success');
+  render();
+}
+window.clearPriceOverride = clearPriceOverride;
+
+// Note modal
+function openNoteModal(eventId) {
+  closeEventActionMenu();
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const current = e.userOverride?.note || '';
+  const html = `
+    <div class="modal-overlay" id="noteModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:center;justify-content:center;padding:1rem">
+      <div style="background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:1.25rem;max-width:480px;width:100%">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+          <div style="font-weight:600;font-size:1rem">Nota da transacção</div>
+          <button onclick="closeNoteModal()" style="background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer">×</button>
+        </div>
+        <textarea id="noteInput" class="form-input" style="width:100%;min-height:90px;resize:vertical" placeholder="ex: liquidez Uniswap V3 ETH/USDC, range 1800-2200...">${current.replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+          <button class="btn btn-outline btn-sm" onclick="closeNoteModal()">Cancelar</button>
+          <button class="btn btn-gold btn-sm" onclick="saveNote('${eventId}')">Guardar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
+  setTimeout(() => document.getElementById('noteInput')?.focus(), 50);
+}
+window.openNoteModal = openNoteModal;
+
+function closeNoteModal() {
+  document.getElementById('noteModalOverlay')?.remove();
+}
+window.closeNoteModal = closeNoteModal;
+
+function saveNote(eventId) {
+  const e = _findEventById(eventId);
+  if (!e) return;
+  const note = document.getElementById('noteInput')?.value?.trim() || '';
+  e.userOverride = e.userOverride || {};
+  if (note) e.userOverride.note = note;
+  else delete e.userOverride.note;
+  e.userOverride.updatedAt = Date.now();
+  closeNoteModal();
+  saveState();
+  toast('✓ Nota guardada', 'success');
+  render();
+}
+window.saveNote = saveNote;
 window.cancelPriceFetch = cancelPriceFetch;
 window.clearPriceCacheUI = clearPriceCacheUI;
 
@@ -9279,6 +9654,8 @@ function renderHistory(w) {
   const filterType = window._histFilterType || 'all';
   const filterAsset = window._histFilterAsset || '';
   const filterProto = window._histFilterProto || 'all';
+  const hideSpam = (w.hideSpam !== false); // default true
+  const showSpamOverride = window._histShowSpam === true; // user can temporarily reveal
 
   // Apply filters
   let filtered = walletEvents;
@@ -9287,6 +9664,16 @@ function renderHistory(w) {
   if (filterAsset) filtered = filtered.filter(e => (e.asset || '').toUpperCase().includes(filterAsset.toUpperCase()));
   if (filterProto === '__unknown__') filtered = filtered.filter(e => !e.protocol);
   else if (filterProto !== 'all') filtered = filtered.filter(e => e.protocol === filterProto);
+
+  // Hide spam (user-marked OR auto-detected: no priceEUR for ERC-20 receives)
+  const beforeSpamCount = filtered.length;
+  let hiddenSpam = 0;
+  if (hideSpam && !showSpamOverride) {
+    filtered = filtered.filter(e => {
+      if (e.userOverride?.spam) { hiddenSpam++; return false; }
+      return true;
+    });
+  }
 
   // Sort newest first
   filtered = [...filtered].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
@@ -9532,6 +9919,19 @@ function renderHistory(w) {
 
       <!-- Events table -->
       <div class="panel">
+        ${hiddenSpam > 0 ? `
+          <div style="padding:0.6rem 1rem;background:rgba(212,175,122,0.06);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0.6rem;font-size:0.78rem">
+            <span style="color:var(--gold)">⊘</span>
+            <span><strong>${hiddenSpam}</strong> events marcados como spam ocultados.</span>
+            <button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:0.7rem" onclick="window._histShowSpam=true;render()">Mostrar spam</button>
+          </div>
+        ` : (showSpamOverride ? `
+          <div style="padding:0.6rem 1rem;background:rgba(220,80,80,0.08);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0.6rem;font-size:0.78rem">
+            <span style="color:var(--red)">⊘</span>
+            <span>A mostrar spam events.</span>
+            <button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:0.7rem" onclick="window._histShowSpam=false;render()">Ocultar spam</button>
+          </div>
+        ` : '')}
         <div class="panel-body no-pad">
           <div class="table-wrap">
             <table>
@@ -9546,14 +9946,19 @@ function renderHistory(w) {
                   <th>Direcção</th>
                   <th>Counterparty</th>
                   <th>Tx</th>
+                  <th style="width:36px"></th>
                 </tr>
               </thead>
               <tbody>
-                ${pageEvents.map(e => `
-                  <tr>
+                ${pageEvents.map(e => {
+                  const overrideMark = e.userOverride ? '<span title="Reclassificado manualmente" style="color:var(--gold);font-size:0.7rem">✎</span>' : '';
+                  const spamMark = e.userOverride?.spam ? '<span title="Marcado como spam" style="color:var(--red);font-size:0.7rem">⊘</span>' : '';
+                  const rowOpacity = e.userOverride?.spam ? 'opacity:0.4' : '';
+                  return `
+                  <tr style="${rowOpacity}">
                     <td style="font-family:var(--mono);font-size:0.75rem">${e.date || '—'}</td>
                     <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${chainColor(e.chain)};margin-right:0.4rem"></span>${e.chain.toUpperCase()}</td>
-                    <td>${typeBadge(e.type)}</td>
+                    <td>${typeBadge(e.userOverride?.txType || e.type)} ${overrideMark}${spamMark}</td>
                     <td style="font-family:var(--mono);font-weight:600;font-size:0.78rem">${e.asset || '?'}</td>
                     <td style="text-align:right;font-family:var(--num);font-size:0.78rem">${fmtAmount(e)}</td>
                     <td style="text-align:right;font-family:var(--num);font-size:0.78rem;color:${typeof e.priceEUR === 'number' ? 'var(--gold)' : 'var(--text-muted)'}">
@@ -9570,8 +9975,9 @@ function renderHistory(w) {
                         : `<span style="font-family:var(--mono);color:var(--text-muted)" title="${e.counterparty?.address || ''}">${fmtAddr(e.counterparty?.address)}</span>`}
                     </td>
                     <td><a href="${getTxUrl(e.chain, e.txHash)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:0.7rem;color:var(--gold)">${e.txHash.slice(0, 6)}…</a></td>
+                    <td style="text-align:center"><button class="btn-row-menu" onclick="openEventActionMenu(event, '${e.id}')" title="Acções">⋯</button></td>
                   </tr>
-                `).join('')}
+                `;}).join('')}
               </tbody>
             </table>
           </div>
@@ -10300,9 +10706,39 @@ async function restoreBackupFromDiag(index) {
   }
 }
 
-function exportFullBackup() {
+async function exportFullBackup() {
   try {
-    const blob = storageManager.exportToBlob(state);
+    // Build a comprehensive backup object including state + priceCache from IDB
+    const backup = {
+      _aurumBackupVersion: 2,
+      _exportedAt: Date.now(),
+      _exportedAtISO: new Date().toISOString(),
+      state: state,
+      priceCache: { prices: {}, rates: {} },
+    };
+
+    // Snapshot priceCache (USD prices + EUR rates) from IDB
+    try {
+      const keys = await idb.keys();
+      let pricesCount = 0, ratesCount = 0;
+      for (const k of (keys || [])) {
+        if (typeof k !== 'string') continue;
+        if (k.startsWith(PRICE_IDB_STORE_KEY_PREFIX)) {
+          const v = await idb.get(k);
+          if (v) { backup.priceCache.prices[k] = v; pricesCount++; }
+        } else if (k.startsWith(RATE_IDB_STORE_KEY_PREFIX)) {
+          const v = await idb.get(k);
+          if (v) { backup.priceCache.rates[k] = v; ratesCount++; }
+        }
+      }
+      backup._priceCacheStats = { prices: pricesCount, rates: ratesCount };
+    } catch (err) {
+      errorLogger.warn('priceCache export failed: ' + err.message);
+      backup._priceCacheStats = { prices: 0, rates: 0, error: err.message };
+    }
+
+    const json = JSON.stringify(backup);
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const date = new Date().toISOString().slice(0, 10);
@@ -10311,7 +10747,10 @@ function exportFullBackup() {
     a.download = `aurum_backup_${date}_${(w?.name||'wallet').replace(/\W+/g,'_')}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast('✓ Backup exportado (guarda no Drive/Dropbox)', 'success');
+
+    const sizeKB = Math.round(json.length / 1024);
+    const stats = backup._priceCacheStats;
+    toast(`✓ Backup exportado (${sizeKB}KB · ${state.events?.length||0} events · ${stats.prices} prices · ${stats.rates} rates)`, 'success');
   } catch (err) {
     toast('Export falhou: ' + err.message, 'warn');
   }
@@ -10320,22 +10759,60 @@ function exportFullBackup() {
 async function importFullBackup(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  if (!confirm(`Importar "${file.name}"? O estado actual vai ser substituído. Certifica-te que tens backup do estado actual.`)) {
+  if (!confirm(`Importar "${file.name}"? O estado actual e o priceCache vão ser substituídos. Certifica-te que tens backup do estado actual primeiro.`)) {
     event.target.value = '';
     return;
   }
   try {
     const text = await file.text();
-    const importedState = await storageManager.importFromText(text);
-    if (importedState) {
-      // Snapshot current state into backup before overwrite
-      await storageManager.save(state, { skipBackup: false });
-      // Apply imported
-      Object.assign(state, importedState);
-      saveState();
-      toast(`✓ Backup importado (${file.name})`, 'success');
-      render();
+    const parsed = JSON.parse(text);
+
+    // Snapshot current state to backup BEFORE overwrite (for safety)
+    await storageManager.save(state, { skipBackup: false });
+
+    // Detect format: v2 (with priceCache) or v1 (state only)
+    let importedState, importedPriceCache = null;
+    if (parsed._aurumBackupVersion === 2) {
+      importedState = parsed.state;
+      importedPriceCache = parsed.priceCache;
+    } else {
+      // Legacy: assume entire payload is state
+      importedState = parsed;
     }
+
+    if (!importedState || typeof importedState !== 'object') {
+      throw new Error('Formato de backup inválido (sem state)');
+    }
+
+    // Apply state
+    Object.assign(state, importedState);
+    saveState();
+
+    // Apply priceCache if present
+    let pricesRestored = 0, ratesRestored = 0;
+    if (importedPriceCache && typeof importedPriceCache === 'object') {
+      try {
+        for (const [k, v] of Object.entries(importedPriceCache.prices || {})) {
+          await idb.set(k, v);
+          pricesRestored++;
+        }
+        for (const [k, v] of Object.entries(importedPriceCache.rates || {})) {
+          await idb.set(k, v);
+          ratesRestored++;
+        }
+      } catch (err) {
+        errorLogger.warn('priceCache import partial: ' + err.message);
+      }
+    }
+
+    // Bust dashboard FIFO cache
+    Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+
+    const msg = importedPriceCache
+      ? `✓ Backup importado · ${state.events?.length||0} events · ${pricesRestored} prices · ${ratesRestored} rates`
+      : `✓ Backup importado (formato legacy, sem priceCache) · ${state.events?.length||0} events`;
+    toast(msg, 'success');
+    render();
   } catch (err) {
     toast('Import falhou: ' + err.message, 'warn');
   } finally {
@@ -14258,11 +14735,34 @@ function importJSON(e) {
   r.readAsText(f);
 }
 
-function clearAll() {
-  if (!confirm('Apagar TODOS os dados? Esta acção é irreversível.')) return;
-  if (!confirm('Tens a certeza? Todos os dados serão eliminados.')) return;
-  state={wallets:[],activeWId:null,cards:[],txs:[],imports:[],collateral:[],hfHistory:{}};
-  saveState(); render(); toast('Dados apagados','info');
+async function clearAll() {
+  const eventCount = state.events?.length || 0;
+  const walletCount = state.wallets?.length || 0;
+  const lotCount = state.collateral?.length || 0;
+
+  const msg = `⚠️ Vais apagar TODOS os dados desta app:\n\n` +
+    `· ${walletCount} wallet${walletCount !== 1 ? 's' : ''}\n` +
+    `· ${eventCount} transactions on-chain\n` +
+    `· ${lotCount} lots fiscais\n` +
+    `· Toda a configuração\n\n` +
+    `Esta acção é IRREVERSÍVEL. Recomendado: exportar Backup Completo primeiro.\n\n` +
+    `Continuar?`;
+  if (!confirm(msg)) return;
+
+  // Second-stage offer to export backup
+  if (eventCount > 0 || walletCount > 0) {
+    if (confirm('Queres EXPORTAR BACKUP primeiro? (Recomendado)')) {
+      try { await exportFullBackup(); } catch {}
+      if (!confirm('Backup feito. Apagar tudo agora?')) return;
+    }
+  }
+
+  state = {wallets:[],activeWId:null,cards:[],txs:[],imports:[],collateral:[],hfHistory:{},events:[]};
+  saveState();
+  // Bust dashboard FIFO cache
+  Object.keys(window).forEach(k => { if (k.startsWith('_fifoCache_')) delete window[k]; });
+  render();
+  toast('Todos os dados apagados','info');
 }
 
 // Widget removed in v2.1
